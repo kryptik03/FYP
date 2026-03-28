@@ -1,0 +1,14 @@
+Files and Folders Description:
+
+plot_signals.m
+MATLAB script to visualize the measured signals from 4 channels.
+
+dataset/
+Folder containing datasets for each measured location.
+Each location includes 10 signals per channel (4 channels in total).
+
+setup.png
+Image illustrating the physical setup and measurement locations.
+
+coordinate.png
+Image showing the x, y, z coordinates (in meters) of each measured location.

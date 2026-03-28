@@ -1,0 +1,88 @@
+---
+config:
+  theme: redux
+  layout: fixed
+---
+flowchart LR
+    A(["Start"]) --> B["Read signal from sensor"]
+    B --> C["Plot kernel density estimate (KDE) of readings"]
+    C --> D["Find max density value (m)"]
+    D --> E["Find highest sensor reading with density p % of m (h)"]
+    E --> F["Set threshold = 1.6 × h"]
+    F --> G["Find first occurrence of sensor reading > h (t1)"]
+    G --> H["Isolate input from t1 - 299 to t1 + 6000 samples"]
+    H --> I["Calculate average signal energy of isolated portion (Ea)"]
+    I --> J{"(Ea/1.1) > average energy of entire signal?"}
+    J -- Yes --> K["Save isolated portion"]
+    K --> L["Repeat for next occurrence of sensor reading > h"]
+    L --> G
+    J -- No --> L
+    L -- No more occurrences --> M(["END"])
+
+     A:::bigfont
+     B:::bigfont
+     C:::bigfont
+     D:::bigfont
+     E:::bigfont
+     F:::bigfont
+     G:::bigfont
+     H:::bigfont
+     I:::bigfont
+     J:::bigfont
+     K:::bigfont
+     L:::bigfont
+     M:::bigfont
+    classDef bigfont font-size:28px
+
+
+---
+config:
+  theme: redux
+  layout: fixed
+---
+flowchart LR
+    A["Read the signals and remove DC offset"]:::bigfont
+    B["Square the signals"]:::bigfont
+    C["Smooth signals using gaussian kernel to produce envelope"]:::bigfont
+    D["Normalize envelopes by dividing with average value"]:::bigfont
+    E["Offset two envelopes for maximum cross-correlation"]:::bigfont
+    F["Calculate difference coefficient D between envelopes"]:::bigfont
+
+    A --> B --> C --> D --> E --> F
+
+    classDef bigfont font-size:28px
+
+
+---
+config:
+  theme: redux
+  layout: dagre
+---
+flowchart LR
+    A["Create envelope of first signal"]:::bigfont
+    B["Add to Group 1, envelope becomes characteristic envelope"]:::bigfont
+    C["Create envelope of next signal"]:::bigfont
+    D["Compare envelope with all group characteristic envelopes"]:::bigfont
+    E{"D < threshold?"}:::bigfont
+    F["Add to group, update characteristic envelope by taking average"]:::bigfont
+    G["Create new group, envelope is group characteristic envelope"]:::bigfont
+    H["Any signals left?"]:::bigfont
+    I["Repeat with next signal"]:::bigfont
+    J(["END"]):::bigfont
+    L(["All groups compared?"]):::bigfont
+    Y(["YES"]):::bigfont
+    N(["NO"]):::bigfont
+    Y1(["YES"]):::bigfont
+    N1(["NO"]):::bigfont
+    Y2(["YES"]):::bigfont
+    N2(["NO"]):::bigfont
+
+    A --> B --> C --> D --> E
+    E --> Y --> F --> H
+    E --> N --> L
+    L --> Y1 --> G --> H
+    L --> N1 --> D
+    H --> Y2 --> I --> C
+    H --> N2 --> J
+
+    classDef bigfont font-size:28px

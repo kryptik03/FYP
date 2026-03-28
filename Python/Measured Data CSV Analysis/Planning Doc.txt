@@ -1,0 +1,48 @@
+Typical clustering algorithm:
+Raw data arrives in the form of CSV files. 
+
+Preprocess data: remove DC offset
+
+Isolation algorithm to isolate the timeframe which has PD. save the timeframe
+
+Clustering algorithm - group PD signals by similarity - take one signal in ch1 and find
+most similar in ch2 - ch4.
+
+Save the signal start and end times
+
+TDOA estimation - determine TDOA for each PD signal
+
+Do this until all PD signals are grouped.
+
+Processing of filenames should not be filename format sensitive. 
+Program should be able to handle filenames in any format.
+
+Three types of input file formats:
+1. 4 channel files, each having multiple waveforms. 
+2. Many files for each channel, each having one waveform. 
+3. Somewhere in-between. 
+
+Waveform Isolation should first take these different formatted inputs,  
+isolate the PD signal and transform them into a single format.
+
+That format should be accessible to the DNN.
+For now: we will use a database file (SQL, h5, etc.)
+
+That file should save data about:
+1. Channel number
+2. Filename
+3. Count
+4. Channel readings (isolated)
+5. Start and end times
+6. Sampling frequency
+7. Actual PD location (if known)
+
+One set of python scripts, able to process any kind of input. No need 
+to keep synchronizing two sets of scripts.
+
+
+
+
+DNN Algorithm:
+Input data into DNN, train it to identify which PD belongs to which event.
+Use it to predict on test data.
