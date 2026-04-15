@@ -11,7 +11,7 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
     fprintf('=== Starting Generation for Shard %02d ===\n', shard_id);
     %% 1. Configuration & Parameters
     num_pd_sources = 1;            
-    num_sensors = 3;               
+    num_sensors = 4;               
     buffer_ns = 50;                % Buffer for safe injection bounds (ns)
     label_buffer_ns = 10;          % Tighter buffer specifically for bounding box labels (ns)
     threshold_pct = 0.05;          % 5% (-26dB) dynamic threshold for bounding box cutoff
@@ -52,11 +52,11 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
     Z_transfer_lib = cell(num_pd_sources, num_sensors); % cells are arrays of different data types
     for pd = 1:num_pd_sources
         for s = 1:num_sensors
-            filename = sprintf('FYP_Sim_Actual_Separated_Ports_PD%d_S%d.s2p', pd, s);
+            filename = sprintf('FYP_Sim_Actual_Separated_Ports_PD%d_S%d_Z_Matrix.s2p', pd, s);
             if isfile(filename)
-                S_data = sparameters(filename);
-                freq_Hz = S_data.Frequencies; 
-                Z_data = s2z(S_data.Parameters, S_data.Impedance);
+                Z_data_raw = zparameters(filename);
+                freq_Hz = Z_data_raw.Frequencies; 
+                Z_data = Z_data_raw.Parameters;
                 Z_transfer = squeeze(Z_data(2, 1, :)) ./ (1 + (squeeze(Z_data(2, 2, :)) / 50));
                 % Squeeze turns the 1x1xn into n column vector (matlab is column-major)
                 
@@ -114,7 +114,7 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
             end
             
             % Shifted pulse center deep into the window (50ns) to absorb acausal shifts
-            t0 = 70e-9;   
+            t0 = 100e-9;   
             sigma = (width_ns * 1e-9) / 2.355; 
             i_t = amp * exp(-((t_base - t0).^2) / (2 * sigma^2));
             I_freq = fft(i_t, N_fft);
