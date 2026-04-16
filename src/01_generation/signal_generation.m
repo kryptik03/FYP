@@ -7,7 +7,7 @@ clear; clc;
 %% 1. Master Configuration
 num_shards = 10;
 scenes_per_shard = 10;
-output_dir = fullfile('..', 'data', '01_raw');
+output_dir = fullfile('..', "..", 'data', '01_raw');
 
 fprintf('Initializing Master Data Generation...\n');
 
