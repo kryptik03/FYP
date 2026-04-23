@@ -1,12 +1,18 @@
-function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_v)
+% NEW: The function now outputs 'final_pulse_id' and accepts 'starting_pulse_id'
+function final_pulse_id = generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_v, root_id, nickname, timestamp, history_log, starting_pulse_id)
     arguments
         shard_id
         num_scenes_per_shard
         output_dir
-        ref_peak_v double = 0.005
+        ref_peak_v double
+        root_id char
+        nickname char
+        timestamp char
+        history_log char
+        starting_pulse_id double
     end
-    %% FYP PD DATA PIPELINE: SCENE GENERATOR FUNCTION (V3)
-    % Features: Dynamic Thresholding Bounding Boxes, Function Wrapper, Constant Noise Floor
+    %% FYP PD DATA PIPELINE: SCENE GENERATOR FUNCTION (V4)
+    % Features: Dynamic Thresholding, TOA Tracking, Pulse IDs, Verbose Metadata Injection
     
     fprintf('=== Starting Generation for Shard %02d ===\n', shard_id);
     %% 1. Configuration & Parameters
@@ -44,21 +50,20 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
     f_half = f_fft(1:N_half);
     
     % Pre-allocate the Master Array for Python Compatibility
-    % h5py will read this as (num_scenes, num_sensors, N_scene)
     batch_scenes = zeros(N_scene, num_sensors, num_scenes_per_shard);
-    batch_labels = []; % Format: [Scene_ID, Channel_ID, Class_ID, Start_Idx, End_Idx]
+    batch_labels = []; % NEW Format: [Scene_ID, Channel_ID, Class_ID, Pulse_Instance_ID, TOA_Index, Start_Idx, End_Idx]
     
     %% 2. Pre-Load S-Parameters & Calculate Transfer Impedances
-    Z_transfer_lib = cell(num_pd_sources, num_sensors); % cells are arrays of different data types
+    Z_transfer_lib = cell(num_pd_sources, num_sensors); 
     for pd = 1:num_pd_sources
         for s = 1:num_sensors
-            filename = sprintf('FYP_Sim_Actual_Separated_Ports_PD%d_S%d_Z_Matrix.s2p', pd, s);
+            % Routed to the new touchstone_files directory
+            filename = fullfile('..', '..', 'data', 'touchstone_files', sprintf('FYP_Sim_Actual_Separated_Ports_PD%d_S%d_Z_Matrix.s2p', pd, s));
             if isfile(filename)
                 Z_data_raw = zparameters(filename);
                 freq_Hz = Z_data_raw.Frequencies; 
                 Z_data = Z_data_raw.Parameters;
                 Z_transfer = squeeze(Z_data(2, 1, :)) ./ (1 + (squeeze(Z_data(2, 2, :)) / 50));
-                % Squeeze turns the 1x1xn into n column vector (matlab is column-major)
                 
                 % Interpolate for IFFT
                 Z_half = interp1(freq_Hz, Z_transfer, f_half, 'linear', 0).'; 
@@ -72,23 +77,6 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
         end
     end
     
-    % %% 2.5 Calculate Absolute Constant Noise Parameters
-    % % We generate a nominal 1.0A, 1.0ns pulse through PD1->S1 to establish a baseline peak voltage.
-    % if ~isempty(Z_transfer_lib{1,1})
-    %     t0_ref = 70e-9;   
-    %     sigma_ref = (1.0 * 1e-9) / 2.355; 
-    %     i_ref = 1.0 * exp(-((t_base - t0_ref).^2) / (2 * sigma_ref^2));
-    %     V_ref_freq = fft(i_ref, N_fft) .* Z_transfer_lib{1, 1};
-    %     cutoff_bins = round(10e6 / (Fs/N_fft)); 
-    %     V_ref_freq(1:cutoff_bins) = 0;
-    %     V_ref_freq(end-cutoff_bins+1:end) = 0; 
-    %     ref_peak_v = max(abs(real(ifft(V_ref_freq))));
-    % else
-    %     ref_peak_v = 0.01; % Fallback if file is missing
-    % end
-
-
-    % ref_peak_v is calculated externally    
     % Calculate absolute noise standard deviation (RMS) based on voltage ratio
     noise_rms = ref_peak_v * (10^(-target_snr_db / 20));
     fm_amplitude = 0.05 * ref_peak_v;
@@ -97,12 +85,18 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
     buffer_idx = round((buffer_ns * 1e-9) / dt);
     label_buffer_idx = round((label_buffer_ns * 1e-9) / dt);
     
+    % Initialize the counter with the baton passed from the Master Script
+    global_pulse_id = starting_pulse_id;
+    
     for scene_idx = 1:num_scenes_per_shard
         current_scene = zeros(num_sensors, N_scene);
         num_pulses = randi([0, 3]);
         
         for p = 1:num_pulses
             active_pd = randi([1, num_pd_sources]);
+            
+            % ⭐ FIX: Increment the physical event ID for every new pulse generated
+            global_pulse_id = global_pulse_id + 1; 
             
             % Dynamic Parameters based on PD Type
             if active_pd == 1
@@ -120,7 +114,7 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
             I_freq = fft(i_t, N_fft);
             
             % Calculate Physics-Based TDOA
-            distances = sqrt(sum((coords_S - coords_PD(active_pd, :)).^2, 2)); % returns a column vector
+            distances = sqrt(sum((coords_S - coords_PD(active_pd, :)).^2, 2)); 
             tof = distances / v_prop;                  
             tdoa_sec = tof - min(tof);                 
             tdoa_idx = round(tdoa_sec / dt);           
@@ -160,6 +154,9 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
                 idx_end = idx_in + N_fft - 1;
                 current_scene(ch, idx_in:idx_end) = current_scene(ch, idx_in:idx_end) + v_out;
                 
+                % ⭐ FIX: Time of Arrival Calculation (Index of the start of the injected physics window)
+                toa_idx = idx_in; 
+                
                 % Autonomous Labeling using the Dynamic Threshold
                 global_pulse_start = idx_in + local_start - 1;
                 global_pulse_end = idx_in + local_end - 1;
@@ -171,15 +168,13 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
                 start_ch = max(1, start_ch);
                 end_ch = min(N_scene, end_ch);
                 
-                batch_labels = [batch_labels; (scene_idx - 1), (ch - 1), class_label, start_ch, end_ch];
+                % ⭐ FIX: 7-Column Label Matrix (0-indexed for Python compatibility)
+                batch_labels = [batch_labels; (scene_idx - 1), (ch - 1), class_label, (global_pulse_id - 1), toa_idx, start_ch, end_ch];
             end
         end
         
         % CONSTANT ENVIRONMENTAL NOISE INJECTION
-        % 1. Gaussian White Noise (randn creates mean=0, variance=1. Multiply by RMS)
         current_scene = current_scene + (noise_rms * randn(num_sensors, N_scene));
-        
-        % 2. Constant FM Interference
         fm_wave = fm_amplitude * sin(2 * pi * 100e6 * t_scene);
         current_scene = current_scene + repmat(fm_wave, num_sensors, 1);
         
@@ -219,17 +214,29 @@ function generate_pd_shard(shard_id, num_scenes_per_shard, output_dir, ref_peak_
     h5writeatt(output_file, '/', 'target_snr_db', target_snr_db);
     h5writeatt(output_file, '/', 'ref_peak_v', ref_peak_v);
     
+    % ⭐ FIX: LINEAGE INJECTION (This clears the orange squiggly lines)
+    h5writeatt(output_file, '/', 'root_id', root_id);
+    h5writeatt(output_file, '/', 'node_id', root_id); % Because this is generation, root_id == node_id
+    h5writeatt(output_file, '/', 'nickname', nickname);
+    h5writeatt(output_file, '/', 'analysis_history', history_log);
+    
     h5writeatt(output_file, '/scenes', 'matlab_shape', sprintf('[%d, %d, %d]', size(batch_scenes)));
     h5writeatt(output_file, '/scenes', 'python_h5py_shape', sprintf('(%d, %d, %d)', num_scenes_per_shard, num_sensors, N_scene));
     h5writeatt(output_file, '/scenes', 'dimension_1', 'Python Dim 0: Scene ID');
     h5writeatt(output_file, '/scenes', 'dimension_2', 'Python Dim 1: Sensor Channel');
     h5writeatt(output_file, '/scenes', 'dimension_3', 'Python Dim 2: Time (dt)');
     
+    % ⭐ FIX: Updated Label Definitions
     h5writeatt(output_file, '/labels', 'column_1', 'Scene_ID (0-indexed)');
     h5writeatt(output_file, '/labels', 'column_2', 'Channel_ID (0-indexed)');
     h5writeatt(output_file, '/labels', 'column_3', 'Class_ID (0=PD1, 1=PD2)');
-    h5writeatt(output_file, '/labels', 'column_4', 'Start_Idx');
-    h5writeatt(output_file, '/labels', 'column_5', 'End_Idx');
+    h5writeatt(output_file, '/labels', 'column_4', 'Pulse_Instance_ID (0-indexed)');
+    h5writeatt(output_file, '/labels', 'column_5', 'TOA_Index');
+    h5writeatt(output_file, '/labels', 'column_6', 'Start_Idx');
+    h5writeatt(output_file, '/labels', 'column_7', 'End_Idx');
+    
+    % Pass the baton back to the Master Script before the function ends
+    final_pulse_id = global_pulse_id;
     
     fprintf('Shard %02d generation complete. Saved to %s\n\n', shard_id, output_file);
 end
