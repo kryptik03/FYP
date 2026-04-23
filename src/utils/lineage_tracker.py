@@ -44,6 +44,8 @@ def register_root_dataset(origin, method, folder_path, nickname, history_log, fo
     # Accept MATLAB's ID and timestamp if provided, otherwise generate new ones
     root_id = force_root_id if force_root_id else generate_short_id()
     timestamp = force_timestamp if force_timestamp else datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Normalize to absolute path so pruning works regardless of CWD
+    folder_path = os.path.abspath(folder_path)
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -61,6 +63,8 @@ def register_process(parent_id, stage, method, folder_path, appended_history):
     """Registers a downstream process (Child Node) linked to a parent."""
     node_id = generate_short_id()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Normalize to absolute path so pruning works regardless of CWD
+    folder_path = os.path.abspath(folder_path)
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -147,10 +151,59 @@ def prune_node(node_id):
         
     conn.close()
 
+
+def visualize_tree(root_id):
+    """Builds and prints a visual DAG tree in the terminal."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT node_id, parent_id, stage, method, nickname FROM nodes WHERE root_id=?", (root_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        print(f"[Error] No data found for Root ID: {root_id}")
+        return
+
+    from collections import defaultdict
+    tree = defaultdict(list)
+    nodes_info = {}
+    
+    for row in rows:
+        nid, pid, stage, method, nickname = row
+        tree[pid].append(nid)
+        nodes_info[nid] = {'stage': stage, 'method': method, 'nickname': nickname}
+
+    print(f"\n=== Lineage Tree for Root: {root_id} ===")
+
+    def print_node(node, prefix="", is_last=True):
+        info = nodes_info.get(node, {})
+        stage_method = f"[{info.get('stage')} : {info.get('method')}]"
+
+        # Print the current node
+        if node == root_id:
+            print(f"📦 {node} {stage_method} ('{info.get('nickname')}')")
+        else:
+            branch = "└── " if is_last else "├── "
+            print(f"{prefix}{branch}📄 {node} {stage_method}")
+
+        # Recursively print children
+        children = tree.get(node, [])
+        for i, child in enumerate(children):
+            next_is_last = (i == len(children) - 1)
+            # Root node doesn't add a prefix indent to its immediate children
+            next_prefix = prefix + ("    " if is_last else "│   ") if node != root_id else ""
+            print_node(child, next_prefix, next_is_last)
+
+    print_node(root_id)
+    print("==================================\n")
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="FYP Lineage Tracker CLI")
-    parser.add_argument('--action', choices=['init', 'register_root'], default='init')
+    
+    # NEW: Added 'visualize' and 'prune' to the choices
+    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune'], default='init')
+    
     parser.add_argument('--origin', type=str)
     parser.add_argument('--method', type=str)
     parser.add_argument('--folder_path', type=str)
@@ -158,6 +211,7 @@ if __name__ == "__main__":
     parser.add_argument('--history_log', type=str)
     parser.add_argument('--root_id', type=str)
     parser.add_argument('--timestamp', type=str)
+    parser.add_argument('--node_id', type=str) # NEW: For pruning
 
     args = parser.parse_args()
 
@@ -169,3 +223,13 @@ if __name__ == "__main__":
             args.nickname, args.history_log, 
             args.root_id, args.timestamp
         )
+    elif args.action == 'visualize':
+        if not args.root_id:
+            print("Error: --root_id is required for visualization.")
+        else:
+            visualize_tree(args.root_id)
+    elif args.action == 'prune':
+        if not args.node_id:
+            print("Error: --node_id is required for pruning.")
+        else:
+            prune_node(args.node_id)
