@@ -1,5 +1,3 @@
-# src/utils/lineage_tracker.py
-
 import sqlite3
 import os
 import shutil
@@ -12,8 +10,10 @@ DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../data/li
 def init_db():
     """Initializes the SQLite database and the Edge List table."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = sqlite3.connect(DB_PATH) # connects sqlite database, creating one if none exists.
+    # stores the connection object in 'conn'
+
+    cursor = conn.cursor() # create a cursor object for the connection. 
     
     # Create the Edge List Table
     cursor.execute('''
@@ -30,8 +30,8 @@ def init_db():
             history_log TEXT
         )
     ''')
-    conn.commit()
-    conn.close()
+    conn.commit() # commits the changes to the database
+    conn.close() # closes connection
     print(f"[Tracker] Database initialized at {DB_PATH}")
 
 def generate_short_id(length=4):
@@ -59,10 +59,10 @@ def register_root_dataset(origin, method, folder_path, nickname, history_log, fo
     print(f"[Tracker] Root Dataset Registered: {root_id} ({nickname})")
     return root_id
 
-def register_process(parent_id, stage, method, folder_path, appended_history):
+def register_process(parent_id, stage, method, folder_path, appended_history, force_node_id=None, force_timestamp=None):
     """Registers a downstream process (Child Node) linked to a parent."""
-    node_id = generate_short_id()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    node_id = force_node_id if force_node_id else generate_short_id()
+    timestamp = force_timestamp if force_timestamp else datetime.now().strftime("%Y%m%d_%H%M%S")
     # Normalize to absolute path so pruning works regardless of CWD
     folder_path = os.path.abspath(folder_path)
     
@@ -71,7 +71,7 @@ def register_process(parent_id, stage, method, folder_path, appended_history):
     
     # Fetch parent details to inherit origin, root_id, nickname, and previous history
     cursor.execute("SELECT root_id, origin, nickname, history_log FROM nodes WHERE node_id=?", (parent_id,))
-    parent_data = cursor.fetchone()
+    parent_data = cursor.fetchone() # returns the fetched row as a python tuple. If no row is found, it returns None. 
     
     if not parent_data:
         raise ValueError(f"Parent Node {parent_id} does not exist in the database.")
@@ -166,11 +166,17 @@ def visualize_tree(root_id):
 
     from collections import defaultdict
     tree = defaultdict(list)
+    '''
+    When you write tree = defaultdict(list), you are telling Python: "Make a dictionary. 
+    If I ever try to access a key that doesn't exist, do not throw an error. 
+    Instead, automatically create that key and set its default value to an empty list
+    '''
+
     nodes_info = {}
     
     for row in rows:
         nid, pid, stage, method, nickname = row
-        tree[pid].append(nid)
+        tree[pid].append(nid) # Add the child ID (nid) to the parent's (pid) list
         nodes_info[nid] = {'stage': stage, 'method': method, 'nickname': nickname}
 
     print(f"\n=== Lineage Tree for Root: {root_id} ===")
@@ -193,6 +199,7 @@ def visualize_tree(root_id):
             # Root node doesn't add a prefix indent to its immediate children
             next_prefix = prefix + ("    " if is_last else "│   ") if node != root_id else ""
             print_node(child, next_prefix, next_is_last)
+        # dayum this's a really smart way of doing it!
 
     print_node(root_id)
     print("==================================\n")
@@ -202,7 +209,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FYP Lineage Tracker CLI")
     
     # NEW: Added 'visualize' and 'prune' to the choices
-    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune'], default='init')
+    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune', 'register_processs'], default='init')
     
     parser.add_argument('--origin', type=str)
     parser.add_argument('--method', type=str)
@@ -212,6 +219,8 @@ if __name__ == "__main__":
     parser.add_argument('--root_id', type=str)
     parser.add_argument('--timestamp', type=str)
     parser.add_argument('--node_id', type=str) # NEW: For pruning
+    parser.add_argument('--parent_id', type=str) # NEW: For registering a process
+    parser.add_argument('--stage', type=str) # NEW: For registering a process
 
     args = parser.parse_args()
 
@@ -228,6 +237,11 @@ if __name__ == "__main__":
             print("Error: --root_id is required for visualization.")
         else:
             visualize_tree(args.root_id)
+    elif args.action == 'register_process':
+        register_process(
+            args.parent_id, args.stage, args.method, args.folder_path, 
+            args.history_log, args.node_id, args.timestamp
+        )
     elif args.action == 'prune':
         if not args.node_id:
             print("Error: --node_id is required for pruning.")

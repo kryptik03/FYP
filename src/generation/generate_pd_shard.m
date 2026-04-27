@@ -78,7 +78,7 @@ function final_pulse_id = generate_pd_shard(shard_id, num_scenes_per_shard, outp
     end
     
     % Calculate absolute noise standard deviation (RMS) based on voltage ratio
-    noise_rms = ref_peak_v * (10^(-target_snr_db / 20));
+    noise_rms = ref_peak_v * (10^(-target_snr_db / 20)); %NEED FACT CHECK
     fm_amplitude = 0.05 * ref_peak_v;
     
     %% 3. Generate Scenes
@@ -107,7 +107,7 @@ function final_pulse_id = generate_pd_shard(shard_id, num_scenes_per_shard, outp
                 width_ns = 1.1 + (0.1) * rand();  
             end
             
-            % Shifted pulse center deep into the window (50ns) to absorb acausal shifts
+            % Shifted pulse center deep into the window (100ns) to absorb acausal shifts
             t0 = 100e-9;   
             sigma = (width_ns * 1e-9) / 2.355; 
             i_t = amp * exp(-((t_base - t0).^2) / (2 * sigma^2));
@@ -133,7 +133,7 @@ function final_pulse_id = generate_pd_shard(shard_id, num_scenes_per_shard, outp
                 V_out_freq(1:cutoff_bins) = 0;
                 V_out_freq(end-cutoff_bins+1:end) = 0; 
                 
-                v_out = real(ifft(V_out_freq));
+                v_out = real(ifft(V_out_freq)); %why use 'real'?
                 
                 % DYNAMIC THRESHOLDING LOGIC
                 peak_val = max(abs(v_out));
@@ -179,7 +179,7 @@ function final_pulse_id = generate_pd_shard(shard_id, num_scenes_per_shard, outp
         current_scene = current_scene + repmat(fm_wave, num_sensors, 1);
         
         % Store in Master Array 
-        batch_scenes(:, :, scene_idx) = current_scene.'; 
+        batch_scenes(:, :, scene_idx) = current_scene.'; %check, does python really index in a different way?
     end
     
     %% 4. Export to HDF5 Batch
