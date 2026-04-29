@@ -1,0 +1,74 @@
+# =============================================================================
+# Experiment Configuration: exp01_yolo1d
+# Model  : 1D CNN Backbone + Anchor-Free YOLO Head
+# Task   : Joint PD Detection (bounding boxes) + Classification (PD0 vs PD1)
+# Dataset: ShmH  (RootID: ShmH, origin: sy)
+# =============================================================================
+
+experiment:
+  name: "exp01_yolo1d"
+  parent_node_id: "ShmH"          # Lineage parent — the raw dataset root
+  description: >
+    Anchor-free 1D YOLO model for simultaneous PD signal isolation (bounding
+    box detection) and classification on the ShmH synthetic dataset.
+    Per the Routing Rule, all outputs are saved under classification_output/.
+
+# -----------------------------------------------------------------------------
+# Data
+# -----------------------------------------------------------------------------
+data:
+  root_path: "data/raw/synthesised/20260427_170034_sy-ShmH-ShmH"
+  train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  val_shards:   [17, 18, 19, 20]
+
+  # Signal decimation: 500001 raw pts → 1000 decimated pts
+  # Narrowest pulse spans ~8.9 decimated points — safely detectable.
+  decimation_factor: 500
+
+  # YOLO anchor-free grid: 1000 pts / 32 cells = 31.25 pts per cell.
+  # Narrowest pulse (8.9 pts) < cell size (31.25 pts) → one cell per pulse.
+  grid_cells: 32
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  backbone: "cnn_1d"
+  head:     "yolo_head"
+  in_channels:   1       # Per-channel input: (Batch, 1, 1000)
+  base_channels: 32      # First conv layer output channels; doubles each block
+
+# -----------------------------------------------------------------------------
+# Task / Loss
+# -----------------------------------------------------------------------------
+task:
+  type:        "detection"
+  num_classes: 2         # 0 = PD1 (Class 0),  1 = PD2 (Class 1)
+
+  # Loss weights  (Total = λ_obj·L_obj + λ_box·L_box + λ_cls·L_cls)
+  lambda_obj: 1.0
+  lambda_box: 5.0        # Higher weight: box regression is harder
+  lambda_cls: 1.0
+
+  # BCEWithLogitsLoss positive-class weight for objectness.
+  # Roughly 85% of grid cells are background → upweight positive cells.
+  pos_weight: 5.0
+
+# -----------------------------------------------------------------------------
+# Training
+# -----------------------------------------------------------------------------
+training:
+  epochs:        50
+  batch_size:    32
+  learning_rate: 0.001
+  optimizer:     "adam"
+  device:        "auto"  # "auto" → uses CUDA if available, else CPU
+
+# -----------------------------------------------------------------------------
+# Output Paths
+# -----------------------------------------------------------------------------
+output:
+  weights_dir:        "models/weights"
+  config_snapshot_dir: "models/configuration_snapshots"
+  results_dir:        "data/classification_output/cnn_yolo1d"
+  eval_dir:           "data/performance_evaluation/classification/cnn_yolo1d"

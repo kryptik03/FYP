@@ -16,7 +16,7 @@ function final_pulse_id = generate_pd_shard(shard_id, num_scenes_per_shard, outp
     
     fprintf('=== Starting Generation for Shard %02d ===\n', shard_id);
     %% 1. Configuration & Parameters
-    num_pd_sources = 1;            
+    num_pd_sources = 2;            
     num_sensors = 4;               
     buffer_ns = 50;                % Buffer for safe injection bounds (ns)
     label_buffer_ns = 10;          % Tighter buffer specifically for bounding box labels (ns)
@@ -169,7 +169,7 @@ function final_pulse_id = generate_pd_shard(shard_id, num_scenes_per_shard, outp
                 end_ch = min(N_scene, end_ch);
                 
                 % ⭐ FIX: 7-Column Label Matrix (0-indexed for Python compatibility)
-                batch_labels = [batch_labels; (scene_idx - 1), (ch - 1), class_label, (global_pulse_id - 1), toa_idx, start_ch, end_ch];
+                batch_labels = [batch_labels; (scene_idx - 1), (ch - 1), class_label, (global_pulse_id - 1), (toa_idx-1), (start_ch-1), (end_ch-1)];
             end
         end
         

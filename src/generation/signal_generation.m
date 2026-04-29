@@ -6,9 +6,9 @@ clear; clc;
 rng('shuffle'); % Seeds the random number generator based on the current time
 
 %% 1. Master Configuration & Lineage Setup
-num_shards = 10;
-scenes_per_shard = 10;
-nickname = 'Baseline_Synthesis_v1'; % User-defined nickname
+num_shards = 20;
+scenes_per_shard = 20;
+nickname = 'First try at an actual dataset'; % User-defined nickname
 
 fprintf('Initializing Master Data Generation...\n');
 
