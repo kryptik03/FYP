@@ -5,7 +5,9 @@ from datetime import datetime
 import string
 import random
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../data/lineage.db'))
+# lineage.db lives alongside this script in src/utils/ so that git tracks it.
+# Colab can push the updated DB back to GitHub after each training run.
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), 'lineage.db'))
 
 def init_db():
     """Initializes the SQLite database and the Edge List table."""
@@ -187,17 +189,17 @@ def visualize_tree(root_id):
 
         # Print the current node
         if node == root_id:
-            print(f"📦 {node} {stage_method} ('{info.get('nickname')}')")
+            print(f"[ROOT] {node} {stage_method} ('{info.get('nickname')}')")
         else:
-            branch = "└── " if is_last else "├── "
-            print(f"{prefix}{branch}📄 {node} {stage_method}")
+            branch = "+-- " if is_last else "+-- "
+            print(f"{prefix}{branch}[NODE] {node} {stage_method}")
 
         # Recursively print children
         children = tree.get(node, [])
         for i, child in enumerate(children):
             next_is_last = (i == len(children) - 1)
             # Root node doesn't add a prefix indent to its immediate children
-            next_prefix = prefix + ("    " if is_last else "│   ") if node != root_id else ""
+            next_prefix = prefix + ("    " if is_last else "|   ") if node != root_id else ""
             print_node(child, next_prefix, next_is_last)
         # dayum this's a really smart way of doing it!
 
@@ -209,7 +211,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FYP Lineage Tracker CLI")
     
     # NEW: Added 'visualize' and 'prune' to the choices
-    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune', 'register_processs'], default='init')
+    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune', 'register_process'], default='init')
     
     parser.add_argument('--origin', type=str)
     parser.add_argument('--method', type=str)

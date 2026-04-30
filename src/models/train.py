@@ -14,9 +14,17 @@ What this script does (and ONLY what it does)
 3. Build the DataLoaders from the config.
 4. Build the Task (model + optimizer + loss) from the config.
 5. Run the training loop: for each epoch -> training_step -> validation_step.
-6. Save the best checkpoint.
-7. Register the run to the SQLite lineage database.
-8. Write output files to the correct DAG folder.
+6. Save the best checkpoint to models/weights/ and models/configuration_snapshots/.
+7. Register the run to the SQLite lineage database (src/utils/lineage.db).
+
+NOTE ON COLAB WORKFLOW
+-----------------------
+This script intentionally does NOT create folders under data/.
+The data/ folder is managed by Kaggle Datasets and cannot be pushed
+back from Colab. All persistent artifacts are:
+  - models/weights/model_<NodeID>.pt         (download manually after training)
+  - models/configuration_snapshots/config_<NodeID>.yaml  (download manually)
+  - src/utils/lineage.db                     (commit & push from Colab via git)
 
 What this script does NOT do
 -----------------------------
@@ -150,22 +158,10 @@ def main():
     parent_id = exp_cfg["parent_node_id"]   # "ShmH"
     root_id   = parent_id                   # ShmH is itself the root
 
-    # Output folder name follows the DAG naming convention
-    folder_name = f"{run_ts}_sy-{root_id}-{node_id}"
+    weights_dir = os.path.abspath(out_cfg["weights_dir"])
 
-    # Per the ROUTING RULE: multi-task model (isolate + classify) -> goes into
-    # classification_output/
-    results_path = os.path.abspath(
-        os.path.join(out_cfg["results_dir"], "cnn_yolo1d", folder_name)
-    )
-    eval_path = os.path.abspath(
-        os.path.join(out_cfg["eval_dir"], "cnn_yolo1d", folder_name)
-    )
-    os.makedirs(results_path, exist_ok=True)
-    os.makedirs(eval_path,    exist_ok=True)
-
-    print(f"[Lineage] NodeID     : {node_id}")
-    print(f"[Lineage] Run folder : {results_path}")
+    print(f"[Lineage] NodeID      : {node_id}")
+    print(f"[Lineage] Weights dir : {weights_dir}")
 
     # ----------------------------------------------------------------------- #
     # 6. Build Datasets and DataLoaders                                         #
@@ -268,33 +264,26 @@ def main():
             print(f"  ^ New best val loss: {best_val_loss:.4f} (epoch {best_epoch})")
 
     # ----------------------------------------------------------------------- #
-    # 9. Write analysis_history.txt into the results folder                     #
+    # 9. Register this run to the SQLite lineage database                      #
     # ----------------------------------------------------------------------- #
     history_line = (
         f"Detection & Classification via YOLO1D (cnn_yolo1d) at "
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, NodeID: {node_id}, "
         f"BestEpoch: {best_epoch}, BestValLoss: {best_val_loss:.6f}"
     )
-    history_file = os.path.join(results_path, "analysis_history.txt")
-    with open(history_file, "w") as f:
-        f.write(history_line + "\n")
-
-    # ----------------------------------------------------------------------- #
-    # 10. Register this run to the SQLite lineage database                      #
-    # ----------------------------------------------------------------------- #
     print("\n[Lineage] Registering to SQLite DAG...")
     new_node_id = register_process(
-        parent_id       = parent_id,
-        stage           = "classification",   # Routing Rule: most downstream task
-        method          = "cnn_yolo1d",
-        folder_path     = results_path,
-        appended_history= history_line,
-        force_node_id   = node_id,
+        parent_id        = parent_id,
+        stage            = "classification",   # Routing Rule: most downstream task
+        method           = "cnn_yolo1d",
+        folder_path      = weights_dir,         # actual artifact location
+        appended_history = history_line,
+        force_node_id    = node_id,
     )
     print(f"[Lineage] Registered as Node {new_node_id} (child of {parent_id})")
     print(f"\n[Done] Training complete. Best epoch: {best_epoch},"
           f" best val loss: {best_val_loss:.6f}")
-    print(f"[Done] Results -> {results_path}")
+    print(f"[Done] Weights -> {weights_dir}/model_{node_id}.pt")
 
 
 if __name__ == "__main__":

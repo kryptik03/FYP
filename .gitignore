@@ -9,3 +9,8 @@ MATLAB/TDOA Localization code/TDOA Localization/Machine Learning (ML)/best_model
 MATLAB/TDOA Localization code/TDOA Localization/Machine Learning (ML)/best_model_36_0.1gz_0.2r.mat
 /data/
 /.venv/
+
+# Python bytecode — never commit these
+__pycache__/
+*.pyc
+*.pyo
