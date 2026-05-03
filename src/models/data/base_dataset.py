@@ -70,6 +70,9 @@ class BaseDataset(Dataset):
             shard_ids:  List of integer shard numbers to include, e.g.
                         [1, 2, ..., 16] for training.
         """
+        # super() returns a temporary object of the parent class. (torch.utils.data.Dataset)
+        # This allows us to inherit the properties and methods of the parent class.
+        # __init__() initializes the attributes of the parent class. 
         super().__init__()
         self.root_path = root_path
         self.shard_ids = shard_ids

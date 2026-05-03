@@ -78,6 +78,7 @@ class YOLOHead(nn.Module):
         x = self.conv(feature_map)
 
         # Permute to put predictions last: (B, S, num_preds)
+        # Just rearranges the data, nothing else done.
         x = x.permute(0, 2, 1).contiguous()
 
         return x
