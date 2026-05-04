@@ -115,7 +115,9 @@ class DetectionTask(nn.Module):
         # Loss functions                                                       #
         # ------------------------------------------------------------------ #
         pos_weight_val = torch.tensor([task_cfg["pos_weight"]])  # e.g. 5.0
+        # Initialise pos_weight for BCEWithLogitsLoss
         self.bce_obj   = nn.BCEWithLogitsLoss(pos_weight=pos_weight_val)
+
         self.smooth_l1 = nn.SmoothL1Loss()
         self.cross_ent = nn.CrossEntropyLoss()
 
@@ -179,7 +181,10 @@ class DetectionTask(nn.Module):
         # Objectness loss — ALL cells                                        #
         # ---------------------------------------------------------------- #
         # Move pos_weight to same device as predictions
+        # Remember, pos_weight is the weight for positive samples (the "1" in binary classification)
+        # Defined in the config file.
         self.bce_obj.pos_weight = self.bce_obj.pos_weight.to(preds.device)
+        # 
         obj_loss = self.bce_obj(pred_obj, tgt_obj)
 
         # ---------------------------------------------------------------- #
