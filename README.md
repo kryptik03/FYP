@@ -40,7 +40,7 @@ To manage the immense complexity of multi-stage processing, the pipeline employs
 
 ## 🗂️ Directory Architecture (Master Blueprint v3.0)
 
-> **Note:** `data/` and `models/weights/` are strictly `.gitignore`'d. Only `src/` is version-controlled. Heavy data artifacts are stored on Kaggle Datasets; model weights are returned to local storage after cloud training.
+> **Note:** `data/` is strictly `.gitignore`'d. Only `src/` and `models/weights/` are version-controlled. Heavy data artifacts are stored on Kaggle Datasets; model weights are downloaded after cloud training and saved to `models/weights/`.
 
 ```
 FYP/
@@ -184,7 +184,7 @@ YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]
 
 Because each `NodeID` is unique per process run, output folders never collide — old results are never overwritten.
 
-### SQLite Master Ledger (`data/lineage.db`)
+### SQLite Master Ledger (`src/utils/lineage.db`)
 
 The `nodes` table schema:
 
