@@ -8,80 +8,245 @@
 
 This Final Year Project bridges the gap between academic theory and industrial application by solving the **Overlap Problem** — the challenge of detecting multiple, simultaneous PD events masked by heavy structured noise.
 
-The system operates on two parallel tracks:
+The system operates on two parallel data tracks:
 
-| Track | Description |
-|-------|-------------|
-| 🔬 **Synthetic** | Mathematically rigorous data driven by HFSS co-simulation |
-| 📡 **Real-World** | Augmented measurements captured from physical UHF sensors |
+| Track | Origin Tag | Description |
+|-------|------------|-------------|
+| 🔬 **Synthetic** | `sy` | Mathematically rigorous data driven by HFSS co-simulation via MATLAB |
+| 📡 **Measured** | `ms` | Augmented real-world measurements captured from physical UHF sensors |
 
-To manage the immense complexity of multi-stage processing, the pipeline employs a strict **Data Lineage Tracking System** (SQLite) and a highly modular, **Task-Driven PyTorch Architecture**.
+To manage the immense complexity of multi-stage processing, the pipeline employs a strict **Data Lineage Tracking System** (SQLite DAG) and a highly modular, **Task-Driven PyTorch Architecture**.
 
 ---
 
 ## ✨ Key Features
 
-- **Physics-Based Synthesis** — A MATLAB engine utilises HFSS `.s2p` Touchstone files to mathematically distort simulated Gaussian pulses based on calculated Time Difference of Arrival (TDOA) and 3D spatial geometry.
+- **Physics-Based Synthesis** — A MATLAB engine utilises HFSS `.s2p` Touchstone files to mathematically distort simulated Gaussian pulses based on calculated TDOA and 3D spatial geometry. A global absolute noise floor is applied probabilistically at runtime to prevent SNR scaling bugs when multiple PD events overlap.
 
-- **Autonomous Ground Truth Labeling** — Dynamically generates 7-column physics-tracking labels:
+- **Autonomous Ground Truth Labeling** — Dynamically generates 7-column physics-tracking labels that link every sensor spike back to its originating physical event:
   ```
   [Scene_ID, Channel_ID, Class_ID, Pulse_Instance_ID, TOA_Index, Start_Idx, End_Idx]
   ```
 
-- **Directed Acyclic Graph (DAG) Tracking** — A centralised SQLite database tracks the exact ancestry of every dataset and neural network weight, preventing data loss and enabling safe experiment pruning. Naming convention: `YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]`
+- **Directed Acyclic Graph (DAG) Tracking** — A centralised SQLite database (`data/lineage.db`) tracks the exact ancestry of every dataset and model weight, enabling safe experiment branching and pruning.
 
-- **Task-Driven PyTorch Factory** — Decouples `Dataset`, `Backbone`, `Head`, and `Task Objective` into Lego-style blocks that allow infinite modularity without monolithic training loops.
+- **Task-Driven PyTorch Factory** — Decouples `Dataset`, `Backbone`, `Head`, and `Task Objective` into reusable Lego-style blocks. No monolithic training loops — ever.
 
-- **Cloud-Ready HDF5 Sharding** — Handles massive continuous time-series tensors safely by sharding data and utilising dynamic PyTorch decimation (downsampling) to prevent GPU OOM errors (e.g., 500,001 → 1,000 points via `decimation_factor=500`).
+- **Cloud-Ready HDF5 Sharding** — Handles massive continuous time-series tensors safely by sharding data into manageable files and applying in-RAM decimation to prevent GPU OOM errors.
 
-- **Compound YOLO Loss** — Joint detection + classification loss:
-  ```
-  L = λ_obj · BCE_obj  +  λ_box · SmoothL1_box  +  λ_cls · CE_cls
-  ```
-  With `pos_weight` upweighting to counteract ~85% background grid cells.
+- **Schema Consistency** — Both synthetic and measured data are forced into an identical HDF5 scene-based schema, allowing models trained on synthetic data to validate against real-world measurements without architectural changes.
 
 ---
 
 ## 🗂️ Directory Architecture (Master Blueprint v3.0)
 
-> **Note:** `data/` and `models/` (weights) are strictly `.gitignore`'d. Only source code is version-controlled.
+> **Note:** `data/` and `models/weights/` are strictly `.gitignore`'d. Only `src/` is version-controlled. Heavy data artifacts are stored on Kaggle Datasets; model weights are returned to local storage after cloud training.
 
 ```
-PD_FYP_Pipeline/
+FYP/
 ├── data/
-│   ├── touchstone_files/             # HFSS .s2p Touchstone files
-│   ├── unprocessed_measured/         # Raw oscilloscope .wfm files
-│   ├── raw/                          # Birthplace of 'sy' and 'ms' HDF5 shards
-│   ├── isolation_output/             # Bounding boxes (.h5)
-│   ├── features/                     # Extracted features (e.g., CWT matrices)
-│   ├── classification_output/        # Predicted classes & boxes (Downstream routing)
-│   ├── tdoa/                         # Calculated time delays
-│   ├── localisation_output/          # 3D spatial coordinates
-│   ├── performance_evaluation/       # Metrics, plots, confusion matrices
+│   ├── touchstone_files/             # HFSS .s2p Touchstone channel files
+│   ├── unprocessed_measured/         # Raw oscilloscope .wfm files (pre-ingestion)
+│   ├── raw/
+│   │   ├── synthesised/              # Birthplace of 'sy' HDF5 shards
+│   │   └── measured/                 # Birthplace of 'ms' HDF5 shards
+│   ├── isolation_output/             # Bounding box predictions (.h5)
+│   │   └── <method>/
+│   │       └── YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
+│   ├── features/                     # Extracted feature matrices (e.g., CWT)
+│   │   └── <method>/
+│   │       └── YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
+│   ├── classification_output/        # Class predictions (& boxes if joint task)
+│   │   └── <method>/
+│   │       └── YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
+│   ├── tdoa/                         # Calculated inter-sensor time delays
+│   │   └── <method>/
+│   │       └── YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
+│   ├── localisation_output/          # 3D spatial coordinates of PD sources
+│   │   └── <method>/
+│   │       └── YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
+│   ├── performance_evaluation/       # Metrics, plots, confusion matrices (CSV/PNG)
+│   │   ├── isolation/
+│   │   │   └── <method>/YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
+│   │   ├── classification/
+│   │   │   └── <method>/YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
+│   │   ├── tdoa/
+│   │   │   └── <method>/YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
+│   │   └── localisation/
+│   │       └── <method>/YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
 │   └── lineage.db                    # SQLite Master Tracking Database
 │
-├── models/
+├── models/                           # Saved Neural Network Artifacts
 │   ├── weights/                      # .pt checkpoint files (Named by NodeID)
 │   └── configuration_snapshots/      # config.yaml snapshots (Named by NodeID)
 │
 └── src/                              # All source code (version-controlled)
     ├── generation/                   # MATLAB HFSS synthesis scripts
-    ├── ingestion/                    # .wfm → .h5 conversion scripts
-    ├── isolation/                    # Traditional (non-DL) signal isolation
-    ├── classification/               # Traditional ML algorithms (e.g., DBSCAN)
-    ├── obtain_tdoa/                  # Cross-Correlation TDOA math
-    ├── localisation/                 # Particle Swarm Optimization (PSO)
-    ├── utils/                        # Python CLIs (lineage_tracker.py)
+    ├── ingestion/                    # .wfm / .csv → HDF5 conversion & augmentation
+    ├── isolation/                    # Non-DL signal isolation algorithms
+    │   └── <method>/
+    ├── features/                     # Feature extraction algorithms
+    │   └── <method>/
+    ├── classification/               # Non-DL classification algorithms (e.g., DBSCAN)
+    │   └── <method>/
+    ├── obtain_tdoa/                  # TDOA math algorithms (e.g., Cross-Correlation)
+    │   └── <method>/
+    ├── localisation/                 # Spatial algorithms (e.g., PSO)
+    │   └── <method>/
+    ├── utils/                        # Shared utilities (lineage_tracker.py)
     └── models/                       # ⚡ DEEP LEARNING HUB
-        ├── configs/                  # Experiment YAML configs
+        ├── configs/                  # Experiment YAML configs (one per experiment)
         ├── data/                     # PyTorch Datasets & DataLoaders
         ├── models/
-        │   ├── backbones/            # 1D CNN feature extractors
-        │   └── heads/                # YOLO detection heads
-        ├── tasks/                    # Task logic (Detection, Classification)
-        ├── train.py                  # Universal DAG orchestrator
-        └── predict.py                # Inference + performance evaluation
+        │   ├── backbones/            # Pure feature extractor architectures
+        │   └── heads/                # Task-specific output projectors
+        ├── tasks/                    # Task logic: loss functions & training steps
+        ├── utils/                    # PyTorch metrics helpers
+        ├── train.py                  # Universal DAG training orchestrator
+        └── predict.py                # Inference + automatic performance evaluation
 ```
+
+---
+
+## 🔄 Pipeline Stages
+
+The data flows sequentially through 6 stages. Each stage reads from the previous stage's output folder and writes to its own, maintaining strict segregation.
+
+```
+[A] Data Generation / Ingestion
+        │
+        ▼
+[B] Signal Isolation  ──────────────────────── src/isolation/<method>/
+        │                                       src/models/  (DL methods)
+        ▼                                       → data/isolation_output/<method>/
+[C] Feature Extraction ─────────────────────── src/features/<method>/
+        │                                       → data/features/<method>/
+        ▼
+[D] Signal Classification ──────────────────── src/classification/<method>/
+        │                                       src/models/  (DL methods)
+        ▼                                       → data/classification_output/<method>/
+[E] TDOA Calculation ───────────────────────── src/obtain_tdoa/<method>/
+        │                                       → data/tdoa/<method>/
+        ▼
+[F] Localisation ───────────────────────────── src/localisation/<method>/
+                                                → data/localisation_output/<method>/
+```
+
+> **Note — "Detection" = Isolation + Classification.** A model that jointly performs both tasks (e.g., a detection model) outputs ALL its artifacts to `classification_output/` per the **Downstream Routing Rule**. Outputs are never scattered across multiple stage folders.
+
+### Stage Details
+
+| Stage | Input Source | Output Destination | Notes |
+|---|---|---|---|
+| **A1. Synthesis** | `data/touchstone_files/` | `data/raw/synthesised/` | MATLAB + HFSS; registers Root Node in SQLite |
+| **A2. Ingestion** | `data/unprocessed_measured/` | `data/raw/measured/` | `.wfm` → HDF5; augmentation & scene assembly |
+| **B. Isolation** | `data/raw/` | `data/isolation_output/<method>/` | Threshold-based or DL model |
+| **C. Features** | `data/isolation_output/` | `data/features/<method>/` | CWT, STFT, etc. |
+| **D. Classification** | `data/features/` | `data/classification_output/<method>/` | DBSCAN, DL models, etc. |
+| **E. TDOA** | `data/classification_output/` | `data/tdoa/<method>/` | Cross-correlation per Pulse ID |
+| **F. Localisation** | `data/tdoa/` | `data/localisation_output/<method>/` | Particle Swarm Optimization (PSO) |
+
+---
+
+## 📦 HDF5 Data Schema
+
+All data (synthetic and measured) conforms to a shared **Scene-Based** schema, stored as sharded `.h5` files:
+
+| Dataset | Shape | Description |
+|---------|-------|-------------|
+| `/scenes` | `(num_scenes, 4, N_points)` | Multi-channel raw waveform windows |
+| `/labels` | `(num_pulses, 7)` | Physics-tracking label matrix |
+
+**Label columns:** `[Scene_ID, Channel_ID, Class_ID, Pulse_Instance_ID, TOA_Index, Start_Idx, End_Idx]`
+
+Each HDF5 file also carries an `analysis_history` attribute (or a companion `analysis_history.txt`/`.json`), acting as a continuous audit log of every algorithm the data has been through since its birth.
+
+---
+
+## 🧬 Data Lineage & DAG Tracking
+
+### Naming Convention
+
+Every dynamically generated output folder uses a strict naming standard:
+
+```
+YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]
+```
+
+| Part | Description |
+|------|-------------|
+| `YYYYMMDD_HHMMSS` | Birth datetime of the original raw dataset — **inherited by all downstream nodes** for chronological OS sorting |
+| `Origin` | `sy` (Synthesised) or `ms` (Measured) |
+| `RootID` | 4-character alphanumeric ID of the raw dataset root (e.g., `Xa3A`) |
+| `NodeID` | 4-character alphanumeric ID of the specific process applied (e.g., `8Hh7`) |
+
+**Example:** `20260416_175200_sy-Xa3A-8Hh7` → synthesised dataset born on April 16 2026, root `Xa3A`, currently at processing stage `8Hh7`.
+
+Because each `NodeID` is unique per process run, output folders never collide — old results are never overwritten.
+
+### SQLite Master Ledger (`data/lineage.db`)
+
+The `nodes` table schema:
+
+| Column | Description |
+|--------|-------------|
+| `node_id` | **Primary Key.** 4-char alphanumeric unique to this process run |
+| `parent_id` | `node_id` of the direct predecessor (`"NONE"` for root datasets) |
+| `root_id` | `node_id` of the original raw dataset — enables instant family tree queries |
+| `origin` | `"sy"` or `"ms"` |
+| `stage` | Pipeline stage (e.g., `"generation"`, `"isolation"`, `"classification"`) |
+| `method` | Specific algorithm/model (e.g., `"dynamic_threshold"`, `"cnn_yolo1d"`) |
+| `folder_path` | Relative path to the physical output directory on disk |
+| `nickname` | Human-readable label assigned at dataset birth; inherited by all children |
+| `timestamp` | Node creation time (`YYYYMMDD_HHMMSS`) |
+| `history_log` | Append-only full ancestry log |
+
+### Branching Example
+
+One raw dataset can spawn multiple parallel experiments simultaneously:
+
+```
+Xa3A (Root: Synthetic Dataset)
+ ├── 2Jw9  [isolation]  dynamic_threshold
+ ├── bYj7  [isolation]  wavelet
+ └── xR42  [isolation]  deep_learning_model
+```
+
+### Pruning Protocol
+
+Before any node is deleted, the ledger checks for downstream dependants:
+- ✅ **Leaf node** (no children) → confirm `YES` → deletes physical folder → drops DB row.
+- ❌ **Has children** → pruning is **blocked** to protect pipeline integrity.
+
+### Registering a New Node from Python
+
+```python
+from src.utils.lineage_tracker import register_process
+
+new_node = register_process(
+    parent_id="Xa3A",
+    stage="classification",
+    method="cnn_yolo1d",
+    folder_path="data/classification_output/cnn_yolo1d/20260416_175200_sy-Xa3A-8Hh7",
+    appended_history="Isolation & Classification via YOLO1D at 2026-04-19 14:00:00"
+)
+```
+
+---
+
+## 🧠 Deep Learning Architecture (Task-Driven Factory)
+
+All DL experiments live in `src/models/`. The architecture is strictly decomposed into 5 components — no monolithic scripts.
+
+| Component | Location | Responsibility |
+|-----------|----------|----------------|
+| **Config** | `src/models/configs/*.yaml` | Defines dataset, backbone, head, task, and all hyperparameters. No hardcoded values. |
+| **Dataset** | `src/models/data/` | Modal `Dataset` classes per input type (raw canvas, pre-cut boxes, features). Shared base handles HDF5 I/O safely. |
+| **Backbone** | `src/models/models/backbones/` | Pure feature extractors. Agnostic to the downstream task. |
+| **Head** | `src/models/models/heads/` | Task-specific output projectors (detection, classification, TDOA regression, etc.). |
+| **Task** | `src/models/tasks/` | Encapsulates the model, optimizer, and loss function. One `task_*.py` per objective (e.g., `task_detection.py`, `task_classification.py`). |
+
+`train.py` is the **only** entry point — it reads the YAML, builds the factory components, runs the training loop, and saves weights + config snapshots under the generated `NodeID`.
 
 ---
 
@@ -100,130 +265,76 @@ pip install -r requirements.txt
 | `h5py` | ≥ 3.10.0 |
 | `PyYAML` | ≥ 6.0.0 |
 
-MATLAB (with the MATLAB Engine for Python) is additionally required for the synthetic data generation stage.
+> MATLAB (with the MATLAB Engine for Python) is additionally required for the synthetic data generation stage.
 
 ---
 
-### Step 1 — Initialize the Master Ledger
-
-Before generating any data, initialise the SQLite tracking database:
+### Step 1 — Initialise the Master Ledger
 
 ```bash
 python src/utils/lineage_tracker.py --action init
 ```
+
+Run this **once** before generating any data. Creates `data/lineage.db`.
 
 ---
 
 ### Step 2 — Generate Synthetic Data (MATLAB)
 
-Navigate to `src/generation/` and execute the Master Orchestrator in MATLAB.
+Navigate to `src/generation/` and run the master orchestrator script in MATLAB:
 
-**Script:** `signal_generation.m`
+```
+signal_generation.m
+```
 
-This script will:
-1. Read HFSS `.s2p` Touchstone files to model the physical UHF channel.
-2. Synthesise Gaussian PD pulses, distorted by physics-calculated TDOA and 3D geometry.
-3. Generate HDF5 shards and autonomously assign unique Pulse IDs.
-4. Execute a Python system call to register the Root Dataset into the SQLite ledger.
+This script reads HFSS `.s2p` Touchstone files, synthesises physics-distorted Gaussian PD pulses across 4 UHF channels, saves HDF5 shards to `data/raw/synthesised/`, and issues a Python system call to register the Root Node in the SQLite ledger.
 
 ---
 
-### Step 3 — Train the Deep Learning Pipeline
-
-Define your hyperparameters, dataset targets, and model architecture in a YAML config file inside `src/models/configs/`. Then run the universal orchestrator:
+### Step 3 — Ingest Measured Data (Python)
 
 ```bash
-python src/models/train.py --config configs/exp01_yolo1d.yaml
+python src/ingestion/<script>.py --input data/unprocessed_measured/ --output data/raw/measured/
 ```
 
-**Example config** (`exp01_yolo1d.yaml`) trains a `1D CNN Backbone + Anchor-Free YOLO Head` for joint PD isolation and classification on the `ShmH` synthetic dataset.
+Cleans, normalises, augments, and converts raw `.wfm`/`.csv` oscilloscope files into the same scene-based HDF5 schema as synthetic data.
 
 ---
 
-### Step 4 — Run Inference & Evaluation
+### Step 4 — Train a Deep Learning Model
 
-After training, run the inference script to generate predictions and compute performance metrics automatically:
+Create or select a YAML config in `src/models/configs/`, then run:
 
 ```bash
-python src/models/predict.py --config configs/exp01_yolo1d.yaml --node_id <NodeID>
+python src/models/train.py --config configs/<experiment>.yaml
 ```
 
-Outputs saved to `data/performance_evaluation/` include:
-- `metrics.json` — Precision, Recall, F1, mIoU, Class Accuracy
-- Confusion matrices and prediction plots
-- Lineage registration of the evaluation run
+Weights are saved to `models/weights/model_<NodeID>.pt` and the config snapshot to `models/configuration_snapshots/config_<NodeID>.yaml`.
 
 ---
 
-## 🧠 Model Architecture
+### Step 5 — Run Inference & Evaluation
 
-The pipeline uses a **Task-Driven Factory** pattern. All components are decoupled:
-
-```
-Signal Input (B, 1, 1000)
-        │
-        ▼
-┌───────────────┐
-│ CNN1DBackbone │  — Extracts hierarchical features; doubles channels per block
-│  (base_ch=32) │    Output: (B, 256, 32)
-└───────┬───────┘
-        │
-        ▼
-┌───────────────┐
-│   YOLO Head   │  — Anchor-free; predicts 5 values per grid cell
-│  (32 cells)   │    Output: (B, 32, 5)
-└───────┬───────┘
-        │
-        ▼
-Per-cell predictions:
-  [objectness_logit, centre_offset_logit, log_width, class_logit_0, class_logit_1]
-```
-
-### Coordinate Decoding
-
-Raw logits are decoded back to raw sample indices:
-
-```
-centre_norm(i) = (i + sigmoid(pred_centre)) / S
-width_norm     = exp(pred_logwidth)
-start_norm     = centre_norm - width_norm / 2
-end_norm       = centre_norm + width_norm / 2
-
-# Scale back to raw samples:
-start_raw = int(start_norm * seq_len) * decimation_factor
-end_raw   = int(end_norm   * seq_len) * decimation_factor
-```
-
----
-
-## 🔍 Lineage Tracking (CLI)
-
-The DAG tracking system uses a cryptographic-style naming convention:
-
-```
-YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]
-```
-
-Where `Origin` is `sy` (synthetic) or `ms` (measured).
-
-### Available Commands
-
-**Initialize the database:**
 ```bash
+python src/models/predict.py --config configs/<experiment>.yaml --node_id <NodeID>
+```
+
+Outputs (Precision, Recall, F1, mIoU, confusion matrices, plots) are saved to `data/performance_evaluation/<stage>/<method>/<NodeFolder>/` and registered in the lineage ledger.
+
+---
+
+## 🔍 Lineage Tracker CLI Reference
+
+```bash
+# Initialise the database
 python src/utils/lineage_tracker.py --action init
-```
 
-**Visualize an experiment tree:**
-```bash
+# Visualise the experiment tree from a root dataset
 python src/utils/lineage_tracker.py --action visualize --root_id Xa3A
-```
 
-**Safely prune/delete a dead-end experiment:**
-```bash
+# Safely prune a dead-end experiment node (leaf nodes only)
 python src/utils/lineage_tracker.py --action prune --node_id 8Hh7
 ```
-
-All HDF5 files contain a verbose `analysis_history` attribute detailing their exact algorithmic ancestry.
 
 ---
 
@@ -231,30 +342,23 @@ All HDF5 files contain a verbose `analysis_history` attribute detailing their ex
 
 | Rule | Description |
 |------|-------------|
-| **Downstream Routing Rule** | Models performing multiple sequential tasks (e.g., Isolation → Classification) save ALL artifacts to the **most downstream** task's folder. No output scattering. |
-| **Metadata Injection** | Every HDF5 file carries a verbose `analysis_history` attribute detailing its exact algorithmic ancestry. |
-| **No Monolithic Models** | PyTorch architectures must be built as decoupled Lego blocks: `Dataset + Backbone + Head + Task`. No monolithic training loops. |
-| **DAG-Only Deletions** | All experiment artifacts must be pruned via the lineage tracker CLI, never deleted manually. |
-| **Data Gitignore** | `data/` and `models/weights/` are strictly `.gitignore`'d. Only source code is version-controlled. |
+| **Downstream Routing Rule** | A model performing multiple sequential tasks (e.g., Isolation → Classification) saves ALL its artifacts to the **most downstream** stage folder. No output scattering. |
+| **No Monolithic Models** | PyTorch architectures must be built as decoupled components: `Dataset + Backbone + Head + Task`. The training loop in `train.py` must never change. |
+| **DAG-Only Deletions** | Experiment artifacts must always be pruned via `lineage_tracker.py`, never deleted manually. |
+| **Metadata Injection** | Every output folder carries an `analysis_history` attribute or companion file detailing the exact algorithmic ancestry of the data. |
+| **No Hardcoded Hyperparameters** | All model and training parameters live in YAML config files under `src/models/configs/`. |
+| **Data Gitignore** | `data/` and `models/weights/` are strictly `.gitignore`'d. Code is on GitHub; heavy artifacts are on Kaggle Datasets. |
 
 ---
 
-## 🗺️ Full Pipeline Flow
+## ☁️ Cloud Workflow
 
-```mermaid
-graph TD
-    A["HFSS .s2p Files\n(Touchstone)"] --> B["MATLAB Synthesis\n(signal_generation.m)"]
-    B --> C["HDF5 Shards\n(data/raw/)"]
-    C --> D["SQLite Lineage\n(lineage.db)"]
-    C --> E["PyTorch Dataset\n(data/BaseDataset)"]
-    E --> F["CNN1D Backbone"]
-    F --> G["YOLO Head\n(32 grid cells)"]
-    G --> H["DetectionTask\nCompound Loss"]
-    H --> I["model_NodeID.pt\n(models/weights/)"]
-    I --> J["predict.py\nInference + Eval"]
-    J --> K["metrics.json\n(performance_evaluation/)"]
-    J --> D
-```
+| Concern | Tool |
+|---------|------|
+| **Code versioning** | GitHub (`src/` only) |
+| **Heavy data storage** | Kaggle Datasets (HDF5 shards) |
+| **Model training** | Google Colab / cloud GPU instances |
+| **Artifact return** | Only `models/weights/` and `models/configuration_snapshots/` are returned to local storage |
 
 ---
 
