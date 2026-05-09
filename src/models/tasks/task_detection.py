@@ -184,7 +184,7 @@ class DetectionTask(nn.Module):
         # Remember, pos_weight is the weight for positive samples (the "1" in binary classification)
         # Defined in the config file.
         self.bce_obj.pos_weight = self.bce_obj.pos_weight.to(preds.device)
-        # 
+        # Calculates loss based on the BCEWithLogitsLoss formula.
         obj_loss = self.bce_obj(pred_obj, tgt_obj)
 
         # ---------------------------------------------------------------- #

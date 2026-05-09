@@ -1,0 +1,1 @@
+Detection & Classification via YOLO1D (cnn_yolo1d) at 2026-04-27 18:50:43, NodeID: 5dq9, BestEpoch: 2, BestValLoss: 4.208629

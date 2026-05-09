@@ -7,7 +7,10 @@ Python/Measured Data CSV Analysis/Simulated_Waveforms/
 Python/Simulated Data CSV Analysis/Simulated_Waveforms/
 MATLAB/TDOA Localization code/TDOA Localization/Machine Learning (ML)/best_model_33.mat
 MATLAB/TDOA Localization code/TDOA Localization/Machine Learning (ML)/best_model_36_0.1gz_0.2r.mat
-/data/
+# Raw synthesised HDF5 shards are too large for git (~6 GB total).
+# All other data/ subfolders (performance_evaluation, classification_output, etc.)
+# are tracked normally.
+/data/raw/
 /.venv/
 
 # Python bytecode — never commit these

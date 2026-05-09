@@ -1,0 +1,1 @@
+Inference+Eval via YOLO1D (cnn_yolo1d) at 2026-04-30 19:16:32, Checkpoint: QIRE, InfNodeID: gDZx, Shards: [17, 18, 19, 20], ObjThresh: 0.5, IoUThresh: 0.5, N_det: 470, F1: 0.7582, Recall: 0.7768, Precision: 0.7404

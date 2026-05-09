@@ -43,6 +43,7 @@ import os
 import random
 import string
 import sys
+import time
 from datetime import datetime
 
 import h5py
@@ -323,6 +324,10 @@ def print_and_save_metrics(metrics: dict, output_dir: str):
         print(f"  {cls_label}: {cm['n_detected']}/{cm['n_gt']} detected "
               f"| Det Recall={cm['detection_recall']:.3f} "
               f"| Cls Prec={cm['cls_precision']:.3f}")
+    print("-" * 56)
+    if "inference_time_s" in metrics:
+        print(f"  Inference time    : {metrics['inference_time_s']:.2f}s "
+              f"({metrics.get('samples_per_second', 0):.1f} samples/sec)")
     print(sep)
 
     metrics_path = os.path.join(output_dir, "metrics.json")
@@ -458,18 +463,26 @@ def main():
     # 3. Inference + GT collection                                              #
     # ----------------------------------------------------------------------- #
     print(f"\n[Inference] threshold={args.threshold} ...")
+    infer_start = time.time()
     preds_by_sample, gt_by_sample = run_inference(
         task, loader, dataset, device, args.threshold
     )
+    infer_elapsed = time.time() - infer_start
     total_preds = sum(len(v) for v in preds_by_sample.values())
     total_gt    = sum(len(v) for v in gt_by_sample.values())
+    samples_per_sec = len(dataset) / infer_elapsed if infer_elapsed > 0 else 0
     print(f"[Inference] {total_preds} predictions | {total_gt} ground-truth boxes")
+    print(f"[Inference] Time: {infer_elapsed:.2f}s ({samples_per_sec:.1f} samples/sec)")
 
     # ----------------------------------------------------------------------- #
     # 4. Evaluation                                                             #
     # ----------------------------------------------------------------------- #
     print(f"\n[Evaluation] IoU threshold={args.iou_threshold} ...")
     metrics = evaluate(preds_by_sample, gt_by_sample, args.iou_threshold)
+    # Attach timing info to the metrics dict so it appears in metrics.json
+    metrics["inference_time_s"]    = round(infer_elapsed, 3)
+    metrics["samples_per_second"]  = round(samples_per_sec, 2)
+    metrics["n_samples_evaluated"] = len(dataset)
 
     # ----------------------------------------------------------------------- #
     # 5. Output folder                                                          #

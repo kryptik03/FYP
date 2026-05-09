@@ -19,12 +19,11 @@ What this script does (and ONLY what it does)
 
 NOTE ON COLAB WORKFLOW
 -----------------------
-This script intentionally does NOT create folders under data/.
-The data/ folder is managed by Kaggle Datasets and cannot be pushed
-back from Colab. All persistent artifacts are:
-  - models/weights/model_<NodeID>.pt         (download manually after training)
-  - models/configuration_snapshots/config_<NodeID>.yaml  (download manually)
-  - src/utils/lineage.db                     (commit & push from Colab via git)
+After training, commit and push all of the following from Colab:
+  - models/weights/model_<NodeID>.pt
+  - models/configuration_snapshots/config_<NodeID>.yaml
+  - src/utils/lineage.db
+  - data/performance_evaluation/training/<NodeID>_timing.json
 
 What this script does NOT do
 -----------------------------
@@ -37,10 +36,12 @@ All of the above live in their dedicated modules.  This file only orchestrates.
 """
 
 import argparse
+import json
 import os
 import sys
 import random
 import string
+import time
 from datetime import datetime
 
 import torch
@@ -213,8 +214,12 @@ def main():
     # ----------------------------------------------------------------------- #
     best_val_loss = float("inf")
     best_epoch    = -1
+    epoch_times   = []          # seconds per epoch
+    train_start   = time.time() # wall-clock start of training
+    start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for epoch in range(1, train_cfg["epochs"] + 1):
+        epoch_start = time.time()
 
         # ---- Training ---- #
         train_losses = {"obj": 0.0, "box": 0.0, "cls": 0.0, "total": 0.0}
@@ -241,13 +246,18 @@ def main():
         n_val = len(val_loader)
         val_metrics = {k: v / n_val for k, v in val_metrics.items()}
 
+        # ---- Record epoch time ---- #
+        epoch_elapsed = time.time() - epoch_start
+        epoch_times.append(round(epoch_elapsed, 2))
+
         # ---- Logging ---- #
         print(
             f"Epoch {epoch:03d}/{train_cfg['epochs']:03d} | "
             f"Train loss: {train_losses['total']:.4f} "
             f"(obj={train_losses['obj']:.3f} box={train_losses['box']:.3f} cls={train_losses['cls']:.3f}) | "
             f"Val loss: {val_metrics['total']:.4f} "
-            f"IoU={val_metrics['iou']:.3f} Acc={val_metrics['cls_acc']:.3f}"
+            f"IoU={val_metrics['iou']:.3f} Acc={val_metrics['cls_acc']:.3f} "
+            f"| {epoch_elapsed:.1f}s"
         )
 
         # ---- Save best checkpoint ---- #
@@ -264,12 +274,50 @@ def main():
             print(f"  ^ New best val loss: {best_val_loss:.4f} (epoch {best_epoch})")
 
     # ----------------------------------------------------------------------- #
-    # 9. Register this run to the SQLite lineage database                      #
+    # 9. Save timing report to data/performance_evaluation/training/           #
+    # ----------------------------------------------------------------------- #
+    total_elapsed  = time.time() - train_start
+    end_time_str   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Identify the exact GPU model Colab assigned (or "cpu" if no GPU)
+    if device.type == "cuda" and torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(device)
+    else:
+        gpu_name = "cpu"
+
+    timing_report = {
+        "node_id"              : node_id,
+        "experiment"           : exp_cfg["name"],
+        "device"               : str(device),
+        "gpu_name"             : gpu_name,
+        "start_time"           : start_time_str,
+        "end_time"             : end_time_str,
+        "n_epochs_completed"   : len(epoch_times),
+        "n_train_samples"      : len(train_dataset),
+        "n_val_samples"        : len(val_dataset),
+        "total_training_time_s": round(total_elapsed, 2),
+        "mean_epoch_time_s"    : round(sum(epoch_times) / len(epoch_times), 2) if epoch_times else 0,
+        "epoch_times_s"        : epoch_times,
+        "best_epoch"           : best_epoch,
+        "best_val_loss"        : round(best_val_loss, 6),
+    }
+    timing_dir  = os.path.abspath("data/performance_evaluation/training")
+    os.makedirs(timing_dir, exist_ok=True)
+    timing_path = os.path.join(timing_dir, f"{node_id}_timing.json")
+    with open(timing_path, "w") as f:
+        json.dump(timing_report, f, indent=2)
+    print(f"[Timing] Total training time : {total_elapsed:.1f}s "
+          f"({total_elapsed/60:.1f} min)")
+    print(f"[Timing] Report saved        -> {timing_path}")
+
+    # ----------------------------------------------------------------------- #
+    # 10. Register this run to the SQLite lineage database                     #
     # ----------------------------------------------------------------------- #
     history_line = (
         f"Detection & Classification via YOLO1D (cnn_yolo1d) at "
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, NodeID: {node_id}, "
-        f"BestEpoch: {best_epoch}, BestValLoss: {best_val_loss:.6f}"
+        f"BestEpoch: {best_epoch}, BestValLoss: {best_val_loss:.6f}, "
+        f"TrainingTime: {total_elapsed:.1f}s"
     )
     print("\n[Lineage] Registering to SQLite DAG...")
     new_node_id = register_process(
