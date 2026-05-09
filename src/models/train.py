@@ -57,14 +57,57 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))  # FYP/
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.models.data.dataset_detection import DetectionDataset
-from src.models.tasks.task_detection   import DetectionTask
-from src.utils.lineage_tracker         import register_process
-
-
 # ---------------------------------------------------------------------------
-# Helpers
+# Task factory — imports are deferred so unused modules are never loaded
 # ---------------------------------------------------------------------------
+
+def _build_datasets_and_task(config: dict, task_type: str):
+    """
+    Returns (train_dataset, val_dataset, task) for the requested task_type.
+    Add new elif branches here as new task types are implemented.
+    """
+    data_cfg  = config["data"]
+    root_path = os.path.abspath(data_cfg["root_path"])
+
+    if task_type == "detection":
+        from src.models.data.dataset_exp01 import DetectionDataset
+        from src.models.tasks.task_exp01   import DetectionTask
+        train_ds = DetectionDataset(
+            root_path         = root_path,
+            shard_ids         = data_cfg["train_shards"],
+            decimation_factor = data_cfg["decimation_factor"],
+            grid_cells        = data_cfg["grid_cells"],
+        )
+        val_ds = DetectionDataset(
+            root_path         = root_path,
+            shard_ids         = data_cfg["val_shards"],
+            decimation_factor = data_cfg["decimation_factor"],
+            grid_cells        = data_cfg["grid_cells"],
+        )
+        task = DetectionTask(config)
+
+    elif task_type == "classification":
+        from src.models.data.dataset_exp02 import ClassificationDataset
+        from src.models.tasks.task_exp02   import ClassificationTask
+        train_ds = ClassificationDataset(
+            root_path     = root_path,
+            shard_ids     = data_cfg["train_shards"],
+            max_pulse_len = data_cfg["max_pulse_len"],
+        )
+        val_ds = ClassificationDataset(
+            root_path     = root_path,
+            shard_ids     = data_cfg["val_shards"],
+            max_pulse_len = data_cfg["max_pulse_len"],
+        )
+        task = ClassificationTask(config)
+
+    else:
+        raise ValueError(f"[Error] Unknown task_type in config: '{task_type}'. "
+                         f"Choose from: detection, classification")
+
+    return train_ds, val_ds, task
+from src.utils.lineage_tracker import register_process
+
 
 def generate_node_id(length: int = 4) -> str:
     """Generate a random 4-character alphanumeric NodeID (matches lineage convention)."""
@@ -156,8 +199,8 @@ def main():
     # Inherit RootID from the parent node.
     # The raw dataset folder name encodes it: ...sy-<RootID>-<NodeID>
     # Since the parent IS the root (no processing done yet), root_id == parent_id
-    parent_id = exp_cfg["parent_node_id"]   # "ShmH"
-    root_id   = parent_id                   # ShmH is itself the root
+    parent_id = exp_cfg["parent_node_id"]   # "ShmH" (example)
+    root_id   = parent_id                   # ShmH is itself the root (example)
 
     weights_dir = os.path.abspath(out_cfg["weights_dir"])
 
@@ -165,22 +208,12 @@ def main():
     print(f"[Lineage] Weights dir : {weights_dir}")
 
     # ----------------------------------------------------------------------- #
-    # 6. Build Datasets and DataLoaders                                         #
+    # 6. Build Datasets, DataLoaders, and Task                                  #
     # ----------------------------------------------------------------------- #
-    root_path = os.path.abspath(data_cfg["root_path"])
+    task_type = exp_cfg.get("task_type", "detection")
+    print(f"[Task] Type: {task_type}")
 
-    train_dataset = DetectionDataset(
-        root_path         = root_path,
-        shard_ids         = data_cfg["train_shards"],
-        decimation_factor = data_cfg["decimation_factor"],
-        grid_cells        = data_cfg["grid_cells"],
-    )
-    val_dataset = DetectionDataset(
-        root_path         = root_path,
-        shard_ids         = data_cfg["val_shards"],
-        decimation_factor = data_cfg["decimation_factor"],
-        grid_cells        = data_cfg["grid_cells"],
-    )
+    train_dataset, val_dataset, task = _build_datasets_and_task(config, task_type)
 
     train_loader = DataLoader(
         train_dataset,
@@ -203,7 +236,6 @@ def main():
     # ----------------------------------------------------------------------- #
     # 7. Build Task (model + optimizer + loss)                                  #
     # ----------------------------------------------------------------------- #
-    task = DetectionTask(config)
     task = task.to(device)
 
     total_params = sum(p.numel() for p in task.parameters() if p.requires_grad)
@@ -222,25 +254,27 @@ def main():
         epoch_start = time.time()
 
         # ---- Training ---- #
-        train_losses = {"obj": 0.0, "box": 0.0, "cls": 0.0, "total": 0.0}
+        # Generic accumulator: keys are determined by the first batch.
+        train_losses = None
         for batch in train_loader:
             batch = move_batch_to_device(batch, device)
             _, loss_dict = task.training_step(batch)
-            for k in train_losses:
+            if train_losses is None:
+                train_losses = {k: 0.0 for k in loss_dict}
+            for k in loss_dict:
                 train_losses[k] += loss_dict[k]
 
         n_train = len(train_loader)
         train_losses = {k: v / n_train for k, v in train_losses.items()}
 
         # ---- Validation ---- #
-        val_metrics = {
-            "obj": 0.0, "box": 0.0, "cls": 0.0, "total": 0.0,
-            "iou": 0.0, "cls_acc": 0.0,
-        }
+        val_metrics = None
         for batch in val_loader:
             batch = move_batch_to_device(batch, device)
             m = task.validation_step(batch)
-            for k in val_metrics:
+            if val_metrics is None:
+                val_metrics = {k: 0.0 for k in m}
+            for k in m:
                 val_metrics[k] += m[k]
 
         n_val = len(val_loader)
@@ -250,14 +284,14 @@ def main():
         epoch_elapsed = time.time() - epoch_start
         epoch_times.append(round(epoch_elapsed, 2))
 
-        # ---- Logging ---- #
+        # ---- Logging (prints all keys returned by the task) ---- #
+        train_str = " ".join(f"{k}={v:.4f}" for k, v in train_losses.items())
+        val_str   = " ".join(f"{k}={v:.4f}" for k, v in val_metrics.items())
         print(
             f"Epoch {epoch:03d}/{train_cfg['epochs']:03d} | "
-            f"Train loss: {train_losses['total']:.4f} "
-            f"(obj={train_losses['obj']:.3f} box={train_losses['box']:.3f} cls={train_losses['cls']:.3f}) | "
-            f"Val loss: {val_metrics['total']:.4f} "
-            f"IoU={val_metrics['iou']:.3f} Acc={val_metrics['cls_acc']:.3f} "
-            f"| {epoch_elapsed:.1f}s"
+            f"Train: {train_str} | "
+            f"Val: {val_str} | "
+            f"{epoch_elapsed:.1f}s"
         )
 
         # ---- Save best checkpoint ---- #

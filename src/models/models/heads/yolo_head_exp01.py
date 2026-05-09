@@ -1,5 +1,5 @@
 """
-yolo_head.py
+yolo_head_exp01.py
 ============
 Anchor-Free YOLO Detection Head for 1-D PD signals.
 
@@ -24,7 +24,7 @@ Why raw logits?
 We do NOT apply sigmoid/softmax here.  Instead, the loss functions receive raw
 logits and apply the non-linearities internally.  This is numerically more
 stable (BCEWithLogitsLoss, CrossEntropyLoss).
-Only the decoding function in task_detection.py applies sigmoid/softmax.
+Only the decoding function in task_exp01.py applies sigmoid/softmax.
 """
 
 import torch

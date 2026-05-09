@@ -1,11 +1,11 @@
 """
-predict.py
+predict_exp01.py
 ==========
 Inference + Evaluation script for the YOLO1D PD detection model.
 
 Usage
 -----
-    python src/models/predict.py \\
+    python src/models/predict_exp01.py \\
         --checkpoint QIRE \\
         --shards 17 18 19 20 \\
         --threshold 0.5 \\
@@ -60,8 +60,8 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.models.data.dataset_detection import DetectionDataset
-from src.models.tasks.task_detection   import DetectionTask
+from src.models.data.dataset_exp01 import DetectionDataset
+from src.models.tasks.task_exp01   import DetectionTask
 from src.utils.lineage_tracker         import register_process
 
 
@@ -489,10 +489,14 @@ def main():
     # ----------------------------------------------------------------------- #
     run_ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
     inf_node_id = "".join(random.choices(string.ascii_letters + string.digits, k=4))
-    folder_name = f"{run_ts}_sy-ShmH-{inf_node_id}"
+    exp_cfg     = config["experiment"]
+    root_id     = exp_cfg.get("parent_node_id", "UNKN")   # e.g. "ShmH"
+    origin      = exp_cfg.get("origin", "sy")              # "sy" or "ms"
+    method      = exp_cfg.get("name", "unknown")           # e.g. "exp01_yolo1d"
+    folder_name = f"{run_ts}_{origin}-{root_id}-{inf_node_id}"
     out_cfg     = config["output"]
     output_dir  = os.path.abspath(
-        os.path.join(out_cfg["results_dir"], "cnn_yolo1d", folder_name)
+        os.path.join(out_cfg["results_dir"], method, folder_name)
     )
     os.makedirs(output_dir, exist_ok=True)
     print(f"\n[Output] Folder: {output_dir}")

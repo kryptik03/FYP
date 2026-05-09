@@ -34,8 +34,8 @@ data:
 # Model Architecture
 # -----------------------------------------------------------------------------
 model:
-  backbone: "cnn_1d"
-  head:     "yolo_head"
+  backbone: "cnn_1d_exp01"
+  head:     "yolo_head_exp01"
   in_channels:   1       # Per-channel input: (Batch, 1, 1000)
   # The network width, how many unique features (filters) the model extracts in the first layer
   base_channels: 32      # First conv layer output channels; doubles each block

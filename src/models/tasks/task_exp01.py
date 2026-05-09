@@ -1,5 +1,5 @@
 """
-task_detection.py
+task_exp01.py
 =================
 Task logic for joint PD detection (bounding boxes) and classification.
 
@@ -63,8 +63,8 @@ import shutil
 import torch
 import torch.nn as nn
 
-from ..models.backbones.cnn_1d import CNN1DBackbone
-from ..models.heads.yolo_head import YOLOHead
+from ..models.backbones.cnn_1d_exp01  import CNN1DBackbone
+from ..models.heads.yolo_head_exp01   import YOLOHead
 
 
 class DetectionTask(nn.Module):
