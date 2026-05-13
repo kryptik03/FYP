@@ -1,0 +1,1 @@
+Inference+Eval via CNN1D Cls (exp02_cnn_cls) at 2026-05-13 21:13:23, Checkpoint: W6ph, InfNodeID: zWyj, Shards: [17, 18, 19, 20], N_samples: 448, Accuracy: 0.9978

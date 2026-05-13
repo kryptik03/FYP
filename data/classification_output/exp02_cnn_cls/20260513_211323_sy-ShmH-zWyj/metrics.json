@@ -1,0 +1,28 @@
+{
+  "n_samples_evaluated": 448,
+  "accuracy": 0.9978,
+  "per_class": {
+    "PD1": {
+      "n_gt": 220,
+      "tp": 219,
+      "fp": 0,
+      "fn": 1,
+      "tn": 228,
+      "precision": 1.0,
+      "recall": 0.9955,
+      "f1": 0.9977
+    },
+    "PD2": {
+      "n_gt": 228,
+      "tp": 228,
+      "fp": 1,
+      "fn": 0,
+      "tn": 219,
+      "precision": 0.9956,
+      "recall": 1.0,
+      "f1": 0.9978
+    }
+  },
+  "inference_time_s": 1.467,
+  "samples_per_second": 305.33
+}
