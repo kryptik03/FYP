@@ -1,0 +1,41 @@
+# exp02_cnn_cls.yaml
+# ===================
+# Experiment config: CNN classification on full-resolution PD pulse windows.
+#
+# Pipeline position: Stage D (Classification-only).
+# Input:  PD pulse windows cut from raw HDF5 shards using GT bounding boxes.
+# Output: data/classification_output/cnn_cls/
+#
+# Usage:
+#   python src/models/train.py --config src/models/configs/exp02_cnn_cls.yaml
+
+experiment:
+  name:           exp02_cnn_cls
+  description:    "1D CNN classifier on full-resolution cut PD windows (no decimation)"
+  task_type:      classification          # tells train.py which Dataset + Task to load
+  parent_node_id: ShmH                   # parent node in the lineage DAG
+
+data:
+  root_path:     data/raw/synthesised/20260427_170034_sy-ShmH-ShmH
+  train_shards:  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  val_shards:    [17, 18, 19, 20]
+  max_pulse_len: 4096   # fixed window length in raw samples
+                        # short windows -> centre-padded; long -> centre-cropped
+
+model:
+  backbone:    cnn_1d_exp02
+  feature_dim: 128       # depth of the final conv block / backbone output dim
+  num_classes: 2         # 0 = PD1, 1 = PD2
+  dropout_p:   0.3       # dropout before the linear classification head
+
+training:
+  epochs:     50
+  batch_size: 64
+  lr:         0.001
+  device:     auto       # 'auto' -> cuda if available, else cpu
+
+output:
+  weights_dir:          models/weights
+  config_snapshot_dir:  models/configuration_snapshots
+  results_dir:          data/classification_output
+  eval_dir:             data/performance_evaluation/classification
