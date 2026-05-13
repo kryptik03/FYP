@@ -1,0 +1,2 @@
+Correct signal size (11k), and also, 0ns skewed to the left (correct).
+However, the PRPD plot for this resembles a delamination defect (not correct).

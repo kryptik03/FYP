@@ -1,0 +1,2 @@
+Signal size is 5k instead of 10k
+0ns position to the left, not in the center (correct)

@@ -1,0 +1,2 @@
+Wrong signal size - 5k points instead of 10kpoints
+0ns is at the center (wrong). Should be moved left. 

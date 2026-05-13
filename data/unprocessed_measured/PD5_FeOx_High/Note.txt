@@ -1,0 +1,1 @@
+Correct signal length and 0ns position, but more than 1 discharge inside. however, seems like there's more than 1 PD - high amplitude and low amplitude. The scope was detecting the higher one. 
