@@ -228,6 +228,10 @@ class DetectionTask(nn.Module):
             + self.lambda_cls * cls_loss
         )
 
+        # .item() is used to extract the scalar value from a tensor.
+        # for example, if we have a tensor x = torch.tensor(5),
+        # then x.item() will return 5. this prevents the history of
+        # operations to be carried forward, which would cause a memory leak.
         loss_dict = {
             "obj":   obj_loss.item(),
             "box":   box_loss.item(),
@@ -259,7 +263,13 @@ class DetectionTask(nn.Module):
         self.optimizer.zero_grad()
         preds = self.forward(signal)                    # (B, S, 5)
         total_loss, loss_dict = self.compute_loss(preds, target)
+        # total_loss is a pyTorch Tensor. it contains the history of everything
+        # done to it during the forward pass.
+        # Calling backward() computes the gradients for all parameters w.r.t.
+        # the loss, and stores them in the .grad attribute of each parameter.
         total_loss.backward()
+        # the optimizer looks at those .grad values and adjusts the weights
+        # to make the loss smaller next time.
         self.optimizer.step()
 
         return total_loss, loss_dict
@@ -268,6 +278,9 @@ class DetectionTask(nn.Module):
     # Validation step                                                       #
     # ------------------------------------------------------------------ #
 
+    # tells pyTorch to stop saving the 'history' of operations, so 
+    # it doesn't use memory building a computation graph.
+    # this makes the code run faster and use less memory.
     @torch.no_grad()
     def validation_step(
         self,
@@ -284,6 +297,8 @@ class DetectionTask(nn.Module):
         Returns:
             metrics dict with keys: 'obj', 'box', 'cls', 'total', 'iou', 'cls_acc'
         """
+        # switches to evaluation mode. it turns off dropout and batch normalization, 
+        # so that the model gives consistent outputs for the same inputs.
         self.eval()
         signal, target = batch
 
@@ -303,36 +318,59 @@ class DetectionTask(nn.Module):
         if pos_mask.any():
             # --- Decode predicted boxes ---
             # Cell index tensor: shape (S,) -> broadcast to (B, S)
+            # Creates a 1D tensor of the shape (S)
             cell_indices = torch.arange(S, device=preds.device).float()
             cell_indices = cell_indices.unsqueeze(0)               # (1, S)
 
+            # Decodes the predicted boxes from the grid cells
+            # adds the cell indices to the centre offsets and divides by S to get the centre in normalised coordinates
             pred_centre_norm = (cell_indices + torch.sigmoid(preds[..., 1])) / S
+            # applies exp to the 2nd column of preds, which corresponds to the width
             pred_width_norm  = torch.exp(preds[..., 2])
+            # calculates the start and end of the predicted boxes in normalised coordinates
             pred_start_norm  = pred_centre_norm - pred_width_norm / 2
             pred_end_norm    = pred_centre_norm + pred_width_norm / 2
 
             # --- Decode target boxes ---
+            # Decodes the target boxes from the grid cells
+            # adds the cell indices to the centre offsets and divides by S to get the centre in normalised coordinates
             tgt_centre_norm = (cell_indices + target[..., 1]) / S
+            # applies exp to the 2nd column of target, which corresponds to the width
             tgt_width_norm  = torch.exp(target[..., 2])
+            # calculates the start and end of the target boxes in normalised coordinates
             tgt_start_norm  = tgt_centre_norm - tgt_width_norm / 2
             tgt_end_norm    = tgt_centre_norm + tgt_width_norm / 2
 
             # --- IoU for positive cells ---
+            # extracts the predicted start and end of the positive cells
             p_s = pred_start_norm[pos_mask]
+            # extracts the predicted start and end of the positive cells
             p_e = pred_end_norm[pos_mask]
-            t_s = tgt_start_norm[pos_mask]
+            # extracts the target start and end of the positive cells
             t_e = tgt_end_norm[pos_mask]
 
+            # finds the maximum of the start and end of the predicted and target boxes
             inter_start = torch.max(p_s, t_s)
+            # finds the minimum of the start and end of the predicted and target boxes
             inter_end   = torch.min(p_e, t_e)
+            # calculates the intersection of the predicted and target boxes
             inter       = (inter_end - inter_start).clamp(min=0)
+            # calculates the union of the predicted and target boxes
             union       = (p_e - p_s) + (t_e - t_s) - inter
+            # calculates the IoU of the predicted and target boxes
             iou         = inter / union.clamp(min=1e-6)
             iou_mean    = iou.mean().item()
 
             # --- Classification accuracy at positive cells ---
+            # argmax() is used to find the index of the maximum value along a dimension.
+            # In this case, it finds the index of the maximum value along the last dimension
+            # of the predicted class IDs, which corresponds to the predicted class ID.
+            # returns the index of the maximum value, which is the predicted class ID.
+            # if PD2 has a higher probability, it returns 1. if PD1 has a higher probability, it returns 0.
             pred_class_ids = preds[..., 3:][pos_mask].argmax(dim=-1)  # (N_pos,)
+            # extracts the target class IDs of the positive cells
             true_class_ids = target[..., 3][pos_mask].long()
+            # calculates the classification accuracy of the predicted and target class IDs
             cls_acc = (pred_class_ids == true_class_ids).float().mean().item()
 
         loss_dict["iou"]     = iou_mean
@@ -362,11 +400,16 @@ class DetectionTask(nn.Module):
             }
         """
         B, S, _ = preds.shape
+        # creates a 1D tensor containing integers from 0 to S-1
         cell_indices = torch.arange(S, device=preds.device).float()
-
+        # applies sigmoid to the 0-th column of preds, which corresponds to the objectness score
         obj_scores    = torch.sigmoid(preds[..., 0])          # (B, S)
+        # applies sigmoid to the 1st column of preds, which corresponds to the centre offset
+        # then adds the cell indices and divides by S to get the centre in normalised coordinates
         centre_norms  = (cell_indices + torch.sigmoid(preds[..., 1])) / S
+        # applies exp to the 2nd column of preds, which corresponds to the width
         width_norms   = torch.exp(preds[..., 2])
+        # applies softmax to the 3rd and 4th columns of preds, which corresponds to the class probabilities
         cls_probs     = torch.softmax(preds[..., 3:], dim=-1) # (B, S, 2)
 
         results = []
