@@ -37,8 +37,9 @@ from matplotlib.ticker import AutoMinorLocator
 # ──────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR      = Path(__file__).parent.resolve()
-HDF5_ROOT       = SCRIPT_DIR / "Isolated_Signals_HDF5"
-PLOTS_ROOT      = SCRIPT_DIR / "Plots"
+PROJECT_ROOT    = SCRIPT_DIR.parent.parent.resolve()
+HDF5_ROOT       = PROJECT_ROOT / "data" / "interim_measured" / "isolated_waveforms"
+PLOTS_ROOT      = PROJECT_ROOT / "data" / "measured_signal_plots"
 
 # Colour scheme per channel
 CH_COLOURS = {
