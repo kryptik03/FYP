@@ -92,7 +92,7 @@ class BaseDataset(Dataset):
 
         Called once at construction time - O(num_shards) file opens.
         """
-        NUM_CHANNELS = 4  # fixed by the generation script (num_sensors = 4)
+        first_file = True
 
         for shard_id in self.shard_ids:
             shard_path = os.path.join(
@@ -107,10 +107,20 @@ class BaseDataset(Dataset):
 
             # Read only the scene count - no need to load the data yet
             with h5py.File(shard_path, "r") as f:
-                num_scenes = f["scenes"].shape[0]   # (num_scenes, 4, 500001)
+                num_scenes = f["scenes"].shape[0]
+
+                if first_file:
+                    self.num_channels = f["scenes"].shape[1]
+                    self.raw_len      = f["scenes"].shape[2]
+                    
+                    # Also read metadata attributes if present
+                    self.sampling_frequency_Hz = f.attrs.get("sampling_frequency_Hz", 100e9)
+                    self.time_resolution_s     = f.attrs.get("time_resolution_s", 1e-11)
+                    
+                    first_file = False
 
             for scene_idx in range(num_scenes):
-                for ch_idx in range(NUM_CHANNELS):
+                for ch_idx in range(self.num_channels):
                     self.index.append((shard_path, scene_idx, ch_idx))
 
     # ------------------------------------------------------------------ #

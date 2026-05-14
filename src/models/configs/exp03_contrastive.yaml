@@ -1,0 +1,30 @@
+experiment:
+  name: "exp03_contrastive"
+  description: "Triplet Margin Loss for Instance Grouping + PD Classification."
+  parent_node_id: "UNKN"
+  origin: "sy"
+
+data:
+  root_path: "data/raw/synthesised/UNKN"
+  shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  max_pulse_len: 4096
+
+model:
+  in_channels: 1
+  base_channels: 16
+  embedding_dim: 128
+
+task:
+  num_classes: 2
+  margin: 1.0
+  lambda_triplet: 1.0
+  lambda_cls: 1.0
+
+training:
+  device: "auto"
+  batch_size: 64
+  learning_rate: 0.001
+  epochs: 10
+
+output:
+  results_dir: "results"

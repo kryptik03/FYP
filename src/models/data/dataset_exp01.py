@@ -91,11 +91,9 @@ class DetectionDataset(BaseDataset):
         self.grid_cells        = grid_cells
         self.decimator         = DecimateMaxPool1D(factor=decimation_factor)
 
-        # Pre-compute output sequence length.
+        # Pre-compute output sequence length using dynamically loaded raw_len
         # F.max_pool1d formula: floor((N - kernel) / stride) + 1
-        # With N=500001, kernel=stride=500: (500001-500)//500 + 1 = 1000
-        RAW_LEN      = 500_001
-        self.seq_len = (RAW_LEN - decimation_factor) // decimation_factor + 1
+        self.seq_len = (self.raw_len - decimation_factor) // decimation_factor + 1
 
     # ------------------------------------------------------------------ #
     # YOLO target builder                                                  #

@@ -101,9 +101,24 @@ def _build_datasets_and_task(config: dict, task_type: str):
         )
         task = ClassificationTask(config)
 
+    elif task_type == "contrastive":
+        from src.models.data.dataset_exp03_contrastive import ContrastiveDataset
+        from src.models.tasks.task_exp03_contrastive   import ContrastiveTask
+        train_ds = ContrastiveDataset(
+            root_path     = root_path,
+            shard_ids     = data_cfg["train_shards"],
+            max_pulse_len = data_cfg["max_pulse_len"],
+        )
+        val_ds = ContrastiveDataset(
+            root_path     = root_path,
+            shard_ids     = data_cfg["val_shards"],
+            max_pulse_len = data_cfg["max_pulse_len"],
+        )
+        task = ContrastiveTask(config)
+
     else:
         raise ValueError(f"[Error] Unknown task_type in config: '{task_type}'. "
-                         f"Choose from: detection, classification")
+                         f"Choose from: detection, classification, contrastive")
 
     return train_ds, val_ds, task
 from src.utils.lineage_tracker import register_process
@@ -348,7 +363,7 @@ def main():
     # 10. Register this run to the SQLite lineage database                     #
     # ----------------------------------------------------------------------- #
     history_line = (
-        f"Detection & Classification via YOLO1D (cnn_yolo1d) at "
+        f"Task {task_type} at "
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, NodeID: {node_id}, "
         f"BestEpoch: {best_epoch}, BestValLoss: {best_val_loss:.6f}, "
         f"TrainingTime: {total_elapsed:.1f}s"
@@ -357,7 +372,7 @@ def main():
     new_node_id = register_process(
         parent_id        = parent_id,
         stage            = "classification",   # Routing Rule: most downstream task
-        method           = "cnn_yolo1d",
+        method           = task_type,
         folder_path      = weights_dir,         # actual artifact location
         appended_history = history_line,
         force_node_id    = node_id,

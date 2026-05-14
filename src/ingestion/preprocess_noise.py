@@ -39,7 +39,7 @@ def convert_wfm_to_csv(wfm_path: Path, csv_path: Path) -> bool:
     try:
         result = subprocess.run(
             [str(CONVERTER_EXE), str(wfm_path), "/CSV", str(csv_path)],
-            capture_output=True, timeout=60
+            capture_output=True, timeout=300
         )
         return result.returncode == 0
     except Exception as exc:
@@ -48,10 +48,24 @@ def convert_wfm_to_csv(wfm_path: Path, csv_path: Path) -> bool:
 
 
 def load_csv_amplitude(csv_path: Path):
-    """Parse the Tektronix CSV export, but only keep amplitude (col 4)."""
+    """Parse the Tektronix CSV export faster than genfromtxt."""
     try:
-        data = np.genfromtxt(csv_path, delimiter=",", usecols=(4,))
-        return data.astype(np.float32)
+        # Tektronix CSVs have amplitude in the 5th column (index 4)
+        # We'll use a manual generator to feed np.fromiter for speed
+        def get_amps():
+            with open(csv_path, "r") as f:
+                for line in f:
+                    parts = line.split(",")
+                    if len(parts) >= 5:
+                        try:
+                            yield float(parts[4])
+                        except ValueError:
+                            continue
+        
+        data = np.fromiter(get_amps(), dtype=np.float32)
+        if len(data) == 0:
+            return None
+        return data
     except Exception as exc:
         log.warning("CSV parse error (%s): %s", csv_path.name, exc)
         return None

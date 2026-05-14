@@ -86,11 +86,11 @@ class DetectionTask(nn.Module):
         train_cfg   = config["training"]
         data_cfg    = config["data"]
 
-        self.num_classes       = task_cfg["num_classes"]        # 2
+        self.num_classes       = task_cfg["num_classes"]         # 2
         self.grid_cells        = data_cfg["grid_cells"]          # 32
-        self.seq_len           = (500_001 - data_cfg["decimation_factor"]) \
-                                  // data_cfg["decimation_factor"] + 1  # 1000
-        self.decimation_factor = data_cfg["decimation_factor"]   # 500
+        # Note: seq_len and decimation_factor are no longer stored here globally 
+        # since the model itself does not need to know the sequence length 
+        # for training. It is only passed to decode_predictions() during inference.
 
         # Loss weights
         self.lambda_obj = task_cfg["lambda_obj"]    # 1.0
@@ -384,8 +384,10 @@ class DetectionTask(nn.Module):
     @torch.no_grad()
     def decode_predictions(
         self,
-        preds:     torch.Tensor,   # (B, S, 5) — output of forward()
-        threshold: float = 0.5,    # objectness probability cutoff
+        preds:             torch.Tensor,   # (B, S, 5) — output of forward()
+        seq_len:           int,            # Decimated sequence length from dataset
+        decimation_factor: int,            # Decimation factor from dataset
+        threshold:         float = 0.5,    # objectness probability cutoff
     ) -> list[list[dict]]:
         """
         Convert raw grid predictions into human-readable detection results.
@@ -426,10 +428,10 @@ class DetectionTask(nn.Module):
                 end_n    = centre_n + width_n / 2
 
                 # Convert normalised -> decimated -> raw sample index
-                start_dec = int(start_n * self.seq_len)
-                end_dec   = int(end_n   * self.seq_len)
-                start_raw = start_dec * self.decimation_factor
-                end_raw   = end_dec   * self.decimation_factor
+                start_dec = int(start_n * seq_len)
+                end_dec   = int(end_n   * seq_len)
+                start_raw = start_dec * decimation_factor
+                end_raw   = end_dec   * decimation_factor
 
                 cls_prob_arr = cls_probs[b, s].cpu().tolist()
                 class_id     = int(torch.argmax(cls_probs[b, s]).item())

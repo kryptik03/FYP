@@ -137,7 +137,12 @@ def run_inference(
     for signals, _ in loader:
         signals = signals.to(device)
         preds   = task.forward(signals)                          # (B, S, 5)
-        batch_results = task.decode_predictions(preds, threshold=threshold)
+        batch_results = task.decode_predictions(
+            preds, 
+            seq_len=dataset.seq_len, 
+            decimation_factor=dataset.decimation_factor, 
+            threshold=threshold
+        )
 
         B = signals.shape[0]
         for b in range(B):
