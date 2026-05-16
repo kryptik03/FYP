@@ -138,12 +138,11 @@ def select_device(device_cfg: str) -> torch.device:
 
 
 def move_batch_to_device(
-    batch: tuple[torch.Tensor, torch.Tensor],
+    batch: tuple,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Move a (signal, target) batch tuple to the target device."""
-    signal, target = batch
-    return signal.to(device), target.to(device)
+) -> tuple:
+    """Move all elements of a batch tuple to the target device."""
+    return tuple(x.to(device) if isinstance(x, torch.Tensor) else x for x in batch)
 
 
 # ---------------------------------------------------------------------------
