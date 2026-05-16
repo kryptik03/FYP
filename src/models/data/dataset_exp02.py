@@ -62,16 +62,25 @@ class ClassificationDataset(Dataset):
         """
         Reads labels from every requested shard and registers one index
         entry per PD pulse. Called once at construction — O(num_shards).
-        """
+        first_file = True
         for shard_id in self.shard_ids:
             shard_path = os.path.join(
                 self.root_path, f"synth_shard_{shard_id:02d}.h5"
             )
+            # Fallback to measured data format if synthetic not found
+            if not os.path.exists(shard_path):
+                shard_path = os.path.join(
+                    self.root_path, f"measured_shard_{shard_id:02d}.h5"
+                )
             if not os.path.exists(shard_path):
                 raise FileNotFoundError(
                     f"[ClassificationDataset] Shard not found: {shard_path}"
                 )
             with h5py.File(shard_path, "r") as f:
+                if first_file:
+                    self.time_resolution_s = f.attrs.get("time_resolution_s", 1e-11)
+                    first_file = False
+                    
                 if "labels" not in f or f["labels"].shape[1] == 0:
                     continue
                 labels = f["labels"][:]   # (7, N_pulses)
