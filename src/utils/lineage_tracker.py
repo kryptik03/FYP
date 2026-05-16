@@ -152,9 +152,34 @@ def prune_node(node_id):
         cursor.execute("DELETE FROM nodes WHERE node_id=?", (node_id,))
         conn.commit()
         print(f"-> Removed Node {node_id} from SQLite database.")
+
+def list_roots():
+    """Lists all nodes that have no parent (Root Datasets)."""
+    if not os.path.exists(DB_PATH):
+        print("Database not found.")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT node_id, stage, method, nickname, timestamp 
+        FROM nodes 
+        WHERE parent_id = 'NONE'
+        ORDER BY timestamp DESC
+    """)
+    roots = cursor.fetchall()
+    
+    if not roots:
+        print("No root datasets found.")
     else:
-        print("Pruning aborted.")
-        
+        print("\n=== Registered Root Datasets ===")
+        print(f"{'ID':<6} | {'Stage':<12} | {'Method':<18} | {'Nickname'}")
+        print("-" * 60)
+        for r in roots:
+            print(f"{r[0]:<6} | {r[1]:<12} | {r[2]:<18} | {r[3]}")
+        print("-" * 60)
+    
     conn.close()
 
 
@@ -215,7 +240,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FYP Lineage Tracker CLI")
     
     # NEW: Added 'visualize' and 'prune' to the choices
-    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune', 'register_process'], default='init')
+    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune', 'register_process', 'roots'], default='init')
     
     parser.add_argument('--origin', type=str)
     parser.add_argument('--method', type=str)
@@ -253,3 +278,5 @@ if __name__ == "__main__":
             print("Error: --node_id is required for pruning.")
         else:
             prune_node(args.node_id)
+    elif args.action == 'roots':
+        list_roots()

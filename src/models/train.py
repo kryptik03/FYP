@@ -116,9 +116,28 @@ def _build_datasets_and_task(config: dict, task_type: str):
         )
         task = ContrastiveTask(config)
 
+    elif task_type == "dec":
+        from src.models.data.dataset_exp04_dec import DECDataset
+        from src.models.tasks.task_exp04_dec   import DECTask
+        sources = data_cfg["sources"]
+        # Phase 1 uses augmented pairs (SimCLR)
+        train_ds = DECDataset(
+            sources       = sources,
+            shard_key     = "train_shards",
+            max_pulse_len = data_cfg["max_pulse_len"],
+            augment       = True,
+        )
+        val_ds = DECDataset(
+            sources       = sources,
+            shard_key     = "val_shards",
+            max_pulse_len = data_cfg["max_pulse_len"],
+            augment       = True,   # Symmetric validation during Phase 1
+        )
+        task = DECTask(config)
+
     else:
         raise ValueError(f"[Error] Unknown task_type in config: '{task_type}'. "
-                         f"Choose from: detection, classification, contrastive")
+                         f"Choose from: detection, classification, contrastive, dec")
 
     return train_ds, val_ds, task
 from src.utils.lineage_tracker import register_process
@@ -192,11 +211,22 @@ def main():
     # 3. Smoke-test overrides                                                   #
     # ----------------------------------------------------------------------- #
     if args.smoke_test:
-        print("[Smoke Test] Overriding shards -> [1, 2], epochs -> 2, batch -> 2")
-        data_cfg["train_shards"] = [1, 2]
-        data_cfg["val_shards"]   = [3]
-        train_cfg["epochs"]      = 2
-        train_cfg["batch_size"]  = 2
+        if task_type == "dec":
+            # Override shards inside each source
+            for src in data_cfg["sources"]:
+                src["train_shards"] = [src["train_shards"][0]]
+                src["val_shards"]   = [src["val_shards"][0]]
+            train_cfg["phase1_epochs"] = 1
+            train_cfg["phase2_epochs"] = 1
+            train_cfg["epochs"]        = 2
+            train_cfg["batch_size"]    = 4
+            print("[Smoke Test] Overriding sources to 1 shard each, 1+1 epochs, batch=4")
+        else:
+            print("[Smoke Test] Overriding shards -> [1, 2], epochs -> 2, batch -> 2")
+            data_cfg["train_shards"] = [1, 2]
+            data_cfg["val_shards"]   = [3]
+            train_cfg["epochs"]      = 2
+            train_cfg["batch_size"]  = 2
 
     # ----------------------------------------------------------------------- #
     # 4. Device                                                                 #
@@ -255,71 +285,211 @@ def main():
     total_params = sum(p.numel() for p in task.parameters() if p.requires_grad)
     print(f"[Model] Trainable parameters: {total_params:,}")
 
+    # Shared timing / tracking variables (used by both DEC and standard paths)
+    best_val_loss  = float("inf")
+    best_epoch     = -1
+    epoch_times    = []
+    train_start    = time.time()
+    start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     # ----------------------------------------------------------------------- #
     # 8. Training loop                                                          #
     # ----------------------------------------------------------------------- #
-    best_val_loss = float("inf")
-    best_epoch    = -1
-    epoch_times   = []          # seconds per epoch
-    train_start   = time.time() # wall-clock start of training
-    start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # ----------------------------------------------------------------------- #
+    # Special two-phase DEC training path                                       #
+    # ----------------------------------------------------------------------- #
+    if task_type == "dec":
+        from src.models.data.dataset_exp04_dec import DECDataset
+        import numpy as np
 
-    for epoch in range(1, train_cfg["epochs"] + 1):
-        epoch_start = time.time()
+        phase1_epochs = train_cfg.get("phase1_epochs", 20)
+        phase2_epochs = train_cfg.get("phase2_epochs", 15)
+        lr1 = train_cfg.get("learning_rate_phase1", 0.001)
+        lr2 = train_cfg.get("learning_rate_phase2", 0.0001)
+        update_interval = config.get("task", {}).get("dec_update_interval", 140)
 
-        # ---- Training ---- #
-        # Generic accumulator: keys are determined by the first batch.
-        train_losses = None
-        for batch in train_loader:
-            batch = move_batch_to_device(batch, device)
-            _, loss_dict = task.training_step(batch)
-            if train_losses is None:
-                train_losses = {k: 0.0 for k in loss_dict}
-            for k in loss_dict:
-                train_losses[k] += loss_dict[k]
+        # --- Phase 1: SimCLR --- #
+        print(f"\n[DEC] === Phase 1: SimCLR Pre-Training ({phase1_epochs} epochs) ===")
+        task.set_phase(1, lr1)
+        best_val_loss = float("inf")
+        best_epoch = -1
 
-        n_train = len(train_loader)
-        train_losses = {k: v / n_train for k, v in train_losses.items()}
+        for epoch in range(1, phase1_epochs + 1):
+            epoch_start = time.time()
+            task.train()
 
-        # ---- Validation ---- #
-        val_metrics = None
-        for batch in val_loader:
-            batch = move_batch_to_device(batch, device)
-            m = task.validation_step(batch)
-            if val_metrics is None:
-                val_metrics = {k: 0.0 for k in m}
-            for k in m:
-                val_metrics[k] += m[k]
+            train_losses = None
+            for batch in train_loader:
+                batch = move_batch_to_device(batch, device)
+                _, loss_dict = task.training_step_phase1(batch)
+                if train_losses is None:
+                    train_losses = {k: 0.0 for k in loss_dict}
+                for k in loss_dict:
+                    train_losses[k] += loss_dict[k]
 
-        n_val = len(val_loader)
-        val_metrics = {k: v / n_val for k, v in val_metrics.items()}
+            train_losses = {k: v / len(train_loader) for k, v in train_losses.items()}
 
-        # ---- Record epoch time ---- #
-        epoch_elapsed = time.time() - epoch_start
-        epoch_times.append(round(epoch_elapsed, 2))
+            val_metrics = None
+            for batch in val_loader:
+                batch = move_batch_to_device(batch, device)
+                m = task.validation_step(batch)
+                if val_metrics is None:
+                    val_metrics = {k: 0.0 for k in m}
+                for k in m:
+                    val_metrics[k] += m[k]
+            val_metrics = {k: v / len(val_loader) for k, v in val_metrics.items()}
 
-        # ---- Logging (prints all keys returned by the task) ---- #
-        train_str = " ".join(f"{k}={v:.4f}" for k, v in train_losses.items())
-        val_str   = " ".join(f"{k}={v:.4f}" for k, v in val_metrics.items())
-        print(
-            f"Epoch {epoch:03d}/{train_cfg['epochs']:03d} | "
-            f"Train: {train_str} | "
-            f"Val: {val_str} | "
-            f"{epoch_elapsed:.1f}s"
+            elapsed = time.time() - epoch_start
+            epoch_times.append(round(elapsed, 2))
+            print(f"  P1 Epoch {epoch:03d}/{phase1_epochs} | "
+                  f"Train: {train_losses['simclr']:.4f} | "
+                  f"Val: {val_metrics['simclr']:.4f} | {elapsed:.1f}s")
+
+            if val_metrics["total"] < best_val_loss:
+                best_val_loss = val_metrics["total"]
+                best_epoch = epoch
+                task.save_checkpoint(epoch, node_id,
+                    os.path.abspath(out_cfg["weights_dir"]),
+                    os.path.abspath(out_cfg["config_snapshot_dir"]),
+                    config_path)
+                print(f"    ^ New best Phase1 val loss: {best_val_loss:.4f}")
+
+        # --- Centroid Initialization --- #
+        print("\n[DEC] Extracting all embeddings for K-Means init...")
+        unaugmented_train = DECDataset(
+            sources       = data_cfg["sources"],
+            shard_key     = "train_shards",
+            max_pulse_len = data_cfg["max_pulse_len"],
+            augment       = False,
+        )
+        init_loader = DataLoader(unaugmented_train, batch_size=train_cfg["batch_size"],
+                                  shuffle=False, num_workers=0)
+        all_embs = []
+        task.eval()
+        with torch.no_grad():
+            for batch in init_loader:
+                sig = batch[0].to(device)
+                z = task.backbone(sig)
+                all_embs.append(z.cpu().numpy())
+        all_embs = np.concatenate(all_embs, axis=0)
+        task.init_cluster_centroids(all_embs)
+
+        # --- Phase 2: DEC --- #
+        print(f"\n[DEC] === Phase 2: DEC Cluster Refinement ({phase2_epochs} epochs) ===")
+        task.set_phase(2, lr2)
+
+        # Rebuild loaders with un-augmented data for Phase 2
+        train_loader_p2 = DataLoader(
+            DECDataset(sources=data_cfg["sources"], shard_key="train_shards",
+                       max_pulse_len=data_cfg["max_pulse_len"], augment=False),
+            batch_size=train_cfg["batch_size"], shuffle=True, num_workers=0,
+            pin_memory=(device.type == "cuda"),
+        )
+        val_loader_p2 = DataLoader(
+            DECDataset(sources=data_cfg["sources"], shard_key="val_shards",
+                       max_pulse_len=data_cfg["max_pulse_len"], augment=False),
+            batch_size=train_cfg["batch_size"], shuffle=False, num_workers=0,
+            pin_memory=(device.type == "cuda"),
         )
 
-        # ---- Save best checkpoint ---- #
-        if val_metrics["total"] < best_val_loss:
-            best_val_loss = val_metrics["total"]
-            best_epoch    = epoch
-            task.save_checkpoint(
-                epoch       = epoch,
-                node_id     = node_id,
-                weights_dir = os.path.abspath(out_cfg["weights_dir"]),
-                config_dir  = os.path.abspath(out_cfg["config_snapshot_dir"]),
-                config_path = config_path,
+        best_val_loss_p2 = float("inf")
+        for epoch in range(1, phase2_epochs + 1):
+            epoch_start = time.time()
+            task.train()
+
+            train_losses = None
+            for batch in train_loader_p2:
+                batch = move_batch_to_device(batch, device)
+                _, loss_dict = task.training_step_phase2(batch)
+                if train_losses is None:
+                    train_losses = {k: 0.0 for k in loss_dict}
+                for k in loss_dict:
+                    train_losses[k] += loss_dict[k]
+            train_losses = {k: v / len(train_loader_p2) for k, v in train_losses.items()}
+
+            val_metrics = None
+            for batch in val_loader_p2:
+                batch = move_batch_to_device(batch, device)
+                m = task.validation_step(batch)
+                if val_metrics is None:
+                    val_metrics = {k: 0.0 for k in m}
+                for k in m:
+                    val_metrics[k] += m[k]
+            val_metrics = {k: v / len(val_loader_p2) for k, v in val_metrics.items()}
+
+            elapsed = time.time() - epoch_start
+            epoch_times.append(round(elapsed, 2))
+            print(f"  P2 Epoch {epoch:03d}/{phase2_epochs} | "
+                  f"Train KL: {train_losses['kl_div']:.4f} | "
+                  f"Val KL: {val_metrics['kl_div']:.4f} | {elapsed:.1f}s")
+
+            if val_metrics["total"] < best_val_loss_p2:
+                best_val_loss_p2 = val_metrics["total"]
+                best_epoch = phase1_epochs + epoch
+                task.save_checkpoint(best_epoch, node_id,
+                    os.path.abspath(out_cfg["weights_dir"]),
+                    os.path.abspath(out_cfg["config_snapshot_dir"]),
+                    config_path)
+                print(f"    ^ New best Phase2 val KL: {best_val_loss_p2:.4f}")
+
+        best_val_loss = best_val_loss_p2
+
+    # ----------------------------------------------------------------------- #
+    # Standard single-phase training (detection / classification / contrastive)#
+    # ----------------------------------------------------------------------- #
+    else:
+        for epoch in range(1, train_cfg["epochs"] + 1):
+            epoch_start = time.time()
+
+            # ---- Training ---- #
+            train_losses = None
+            for batch in train_loader:
+                batch = move_batch_to_device(batch, device)
+                _, loss_dict = task.training_step(batch)
+                if train_losses is None:
+                    train_losses = {k: 0.0 for k in loss_dict}
+                for k in loss_dict:
+                    train_losses[k] += loss_dict[k]
+
+            n_train = len(train_loader)
+            train_losses = {k: v / n_train for k, v in train_losses.items()}
+
+            # ---- Validation ---- #
+            val_metrics = None
+            for batch in val_loader:
+                batch = move_batch_to_device(batch, device)
+                m = task.validation_step(batch)
+                if val_metrics is None:
+                    val_metrics = {k: 0.0 for k in m}
+                for k in m:
+                    val_metrics[k] += m[k]
+
+            n_val = len(val_loader)
+            val_metrics = {k: v / n_val for k, v in val_metrics.items()}
+
+            epoch_elapsed = time.time() - epoch_start
+            epoch_times.append(round(epoch_elapsed, 2))
+
+            train_str = " ".join(f"{k}={v:.4f}" for k, v in train_losses.items())
+            val_str   = " ".join(f"{k}={v:.4f}" for k, v in val_metrics.items())
+            print(
+                f"Epoch {epoch:03d}/{train_cfg['epochs']:03d} | "
+                f"Train: {train_str} | "
+                f"Val: {val_str} | "
+                f"{epoch_elapsed:.1f}s"
             )
-            print(f"  ^ New best val loss: {best_val_loss:.4f} (epoch {best_epoch})")
+
+            if val_metrics["total"] < best_val_loss:
+                best_val_loss = val_metrics["total"]
+                best_epoch    = epoch
+                task.save_checkpoint(
+                    epoch       = epoch,
+                    node_id     = node_id,
+                    weights_dir = os.path.abspath(out_cfg["weights_dir"]),
+                    config_dir  = os.path.abspath(out_cfg["config_snapshot_dir"]),
+                    config_path = config_path,
+                )
+                print(f"  ^ New best val loss: {best_val_loss:.4f} (epoch {best_epoch})")
 
     # ----------------------------------------------------------------------- #
     # 9. Save timing report to data/performance_evaluation/training/           #
