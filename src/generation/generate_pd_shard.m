@@ -37,8 +37,8 @@ function final_pulse_id = generate_pd_shard(shard_id, num_scenes_per_shard, outp
                  1.0, 9.0, 1.8];  % S4
                  
     % Time Domain Settings
-    dt = 0.01e-9;                  % 10 picosecond resolution
-    scene_duration = 5000e-9;      % 5 microseconds total canvas
+    dt = 0.2e-9;                  % 200 picosecond resolution
+    scene_duration = 10000e-9;      % 10 microseconds total canvas
     t_scene = 0:dt:scene_duration;
     N_scene = length(t_scene);
     

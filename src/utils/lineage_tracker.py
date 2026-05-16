@@ -139,10 +139,14 @@ def prune_node(node_id):
     if confirm == 'YES':
         # Delete from Disk
         if os.path.exists(folder_path):
-            shutil.rmtree(folder_path)
-            print(f"-> Deleted folder: {folder_path}")
+            if os.path.isdir(folder_path):
+                shutil.rmtree(folder_path)
+                print(f"-> Deleted folder: {folder_path}")
+            else:
+                os.remove(folder_path)
+                print(f"-> Deleted file: {folder_path}")
         else:
-            print(f"-> Directory not found on disk (already deleted?).")
+            print(f"-> Path not found on disk (already deleted?).")
             
         # Delete from DB
         cursor.execute("DELETE FROM nodes WHERE node_id=?", (node_id,))

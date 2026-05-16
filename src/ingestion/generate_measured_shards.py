@@ -174,7 +174,7 @@ def generate_shards(
         with h5py.File(out_file, "w") as h5f:
             h5f.create_dataset("scenes", data=batch_scenes, dtype=np.float64, compression="gzip", compression_opts=4)
             if batch_labels:
-                lbl_arr = np.array(batch_labels, dtype=np.float64)
+                lbl_arr = np.array(batch_labels, dtype=np.float64).T
                 h5f.create_dataset("labels", data=lbl_arr, dtype=np.float64, compression="gzip", compression_opts=4)
                 
             dt_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

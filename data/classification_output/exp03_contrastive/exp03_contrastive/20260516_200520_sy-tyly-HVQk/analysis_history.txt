@@ -1,0 +1,1 @@
+Contrastive Grouping Inference on dataset data/raw/synthesised/20260514_003009_sy-tyly-tyly with model us0f at 2026-05-16 20:05:20. Time TH: 1e-07, Dist TH: 0.5, Shards: [17, 18, 19, 20], ClsAcc: 0.9845, GroupF1: 0.9587.

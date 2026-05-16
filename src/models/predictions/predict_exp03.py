@@ -9,6 +9,8 @@ This script performs two main steps:
 """
 
 import argparse
+import string
+import random
 import json
 import os
 import sys
@@ -81,7 +83,8 @@ def extract_features(
         B = signals.shape[0]
         for b in range(B):
             flat_idx = sample_idx + b
-            shard_path, scene_idx, ch_idx, start_idx, end_idx, class_id = dataset.index[flat_idx]
+            # Updated to match new 7-element index in dataset_exp02
+            shard_path, scene_idx, ch_idx, start_idx, end_idx, class_id, gt_inst_id = dataset.index[flat_idx]
 
             features.append({
                 "shard_path": shard_path,
@@ -90,6 +93,7 @@ def extract_features(
                 "start_idx": start_idx,
                 "end_idx": end_idx,
                 "gt_class_id": class_id,
+                "gt_inst_id": gt_inst_id,
                 "emb": emb[b],
                 "logits": logits[b]
             })
@@ -154,6 +158,7 @@ def group_and_classify_pulses(
                     "start_idx": p["start_idx"],
                     "end_idx": p["end_idx"],
                     "gt_class_id": p["gt_class_id"],
+                    "gt_inst_id": p["gt_inst_id"],
                     "pred_inst_id": instance_id_counter,
                     "pred_class_id": pred_class,
                     "avg_logits": avg_logits.tolist(),
@@ -214,6 +219,7 @@ def main():
     parser.add_argument("--input_path", required=True, help="Path to shard directory (measured or synthesized)")
     parser.add_argument("--time_threshold", type=float, default=100e-9, help="Max time delta (s) for grouping")
     parser.add_argument("--dist_threshold", type=float, default=0.5, help="Max L2 distance for grouping")
+    parser.add_argument("--shards", nargs="+", type=int, default=None, help="Specific shards to evaluate (e.g. 1 2 3)")
     parser.add_argument("--smoke_test", action="store_true", help="Run on a tiny subset for testing")
     args = parser.parse_args()
 
@@ -228,10 +234,11 @@ def main():
 
     # 3. Load dataset
     data_cfg = config["data"]
-    shard_ids = data_cfg["val_shards"]
+    shard_ids = args.shards if args.shards is not None else data_cfg["val_shards"]
+    
     if args.smoke_test:
         shard_ids = [shard_ids[0]]
-        print(f"[Smoke Test] Overriding val_shards to {shard_ids}")
+        print(f"[Smoke Test] Overriding shards to {shard_ids}")
 
     dataset = ClassificationDataset(
         root_path=os.path.abspath(args.input_path),
@@ -262,30 +269,86 @@ def main():
         time_resolution_s=time_res
     )
 
+    # 5b. Compute Metrics
+    y_true = np.array([p["gt_class_id"] for p in grouped_results])
+    y_pred = np.array([p["pred_class_id"] for p in grouped_results])
+    acc = (y_true == y_pred).mean() if len(y_true) > 0 else 0
+
+    # Grouping Performance (Pair-based evaluation)
+    # Count pairs that should be together vs pairs that are together
+    tp_pairs, total_gt_pairs, total_pred_pairs = 0, 0, 0
+    
+    # Group by (shard, scene) to evaluate pairing within each scene
+    eval_scenes = defaultdict(list)
+    for p in grouped_results:
+        eval_scenes[(p["shard_path"], p["scene_idx"])].append(p)
+        
+    for pulses in eval_scenes.values():
+        n = len(pulses)
+        for i in range(n):
+            for j in range(i + 1, n):
+                is_gt_pair = (pulses[i]["gt_inst_id"] == pulses[j]["gt_inst_id"])
+                is_pred_pair = (pulses[i]["pred_inst_id"] == pulses[j]["pred_inst_id"])
+                
+                if is_gt_pair: total_gt_pairs += 1
+                if is_pred_pair: total_pred_pairs += 1
+                if is_gt_pair and is_pred_pair: tp_pairs += 1
+                
+    group_recall = tp_pairs / total_gt_pairs if total_gt_pairs > 0 else 1.0
+    group_precision = tp_pairs / total_pred_pairs if total_pred_pairs > 0 else 1.0
+    group_f1 = 2 * (group_precision * group_recall) / (group_precision + group_recall) if (group_precision + group_recall) > 0 else 0.0
+
+    metrics = {
+        "classification_accuracy": float(acc),
+        "grouping_recall": float(group_recall),
+        "grouping_precision": float(group_precision),
+        "grouping_f1": float(group_f1),
+        "n_pulses": len(grouped_results),
+        "n_gt_instances": len(set((p["shard_path"], p["gt_inst_id"]) for p in grouped_results)),
+        "n_pred_instances": len(set(p["pred_inst_id"] for p in grouped_results)),
+        "time_threshold": args.time_threshold,
+        "dist_threshold": args.dist_threshold
+    }
+
     # 6. Save results
-    node_id = f"pred_{args.checkpoint_id}"
-    out_dir = os.path.abspath(config["output"]["results_dir"])
-    out_h5  = save_results(grouped_results, out_dir, node_id, args)
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    inf_node_id = "".join(random.choices(string.ascii_letters + string.digits, k=4))
+    
+    # Get origin/root from dataset
+    origin = getattr(dataset, "origin", "sy")
+    root_id = getattr(dataset, "root_id", "UNKN")
+    
+    method = config["experiment"].get("name", "exp03_contrastive")
+    folder_name = f"{run_ts}_{origin}-{root_id}-{inf_node_id}"
+    
+    out_dir = os.path.abspath(os.path.join(config["output"]["results_dir"], method, folder_name))
+    out_h5  = save_results(grouped_results, out_dir, inf_node_id, args)
+
+    # 6b. Save Metadata Files
+    with open(os.path.join(out_dir, "metrics.json"), "w") as f:
+        json.dump(metrics, f, indent=4)
 
     # 7. Lineage registration
     print("\n[Lineage] Registering prediction run to SQLite DAG...")
     history_line = (
         f"Contrastive Grouping Inference on dataset {args.input_path} "
         f"with model {args.checkpoint_id} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. "
-        f"Time TH: {args.time_threshold}, Dist TH: {args.dist_threshold}."
+        f"Time TH: {args.time_threshold}, Dist TH: {args.dist_threshold}, "
+        f"Shards: {shard_ids}, ClsAcc: {acc:.4f}, GroupF1: {group_f1:.4f}."
     )
     
-    # We use args.checkpoint_id as parent because this data inherits from the model
-    # (or you could argue it inherits from the dataset, but usually prediction is child of model)
+    with open(os.path.join(out_dir, "analysis_history.txt"), "w") as f:
+        f.write(history_line + "\n")
+    
     register_process(
         parent_id        = args.checkpoint_id,
         stage            = "prediction",
         method           = "contrastive_inference",
-        folder_path      = out_h5,
+        folder_path      = out_dir,
         appended_history = history_line,
-        force_node_id    = node_id
+        force_node_id    = inf_node_id
     )
-    print(f"[Lineage] Registered prediction as Node {node_id}")
+    print(f"[Lineage] Registered prediction as Node {inf_node_id}")
 
 if __name__ == "__main__":
     main()

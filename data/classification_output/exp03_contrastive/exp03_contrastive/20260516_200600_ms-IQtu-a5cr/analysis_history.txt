@@ -1,0 +1,1 @@
+Contrastive Grouping Inference on dataset data/raw/measured/20260516_195843_ms-IQtu-IQtu with model us0f at 2026-05-16 20:06:00. Time TH: 1e-07, Dist TH: 0.5, Shards: [17, 18, 19, 20], ClsAcc: 0.3350, GroupF1: 0.8327.

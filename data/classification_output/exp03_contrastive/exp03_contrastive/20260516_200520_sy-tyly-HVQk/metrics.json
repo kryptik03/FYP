@@ -1,0 +1,11 @@
+{
+    "classification_accuracy": 0.9845132743362832,
+    "grouping_recall": 0.976401179941003,
+    "grouping_precision": 0.9416785206258891,
+    "grouping_f1": 0.9587255611875453,
+    "n_pulses": 452,
+    "n_gt_instances": 113,
+    "n_pred_instances": 114,
+    "time_threshold": 1e-07,
+    "dist_threshold": 0.5
+}

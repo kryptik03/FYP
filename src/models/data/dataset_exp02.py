@@ -62,6 +62,7 @@ class ClassificationDataset(Dataset):
         """
         Reads labels from every requested shard and registers one index
         entry per PD pulse. Called once at construction — O(num_shards).
+        """
         first_file = True
         for shard_id in self.shard_ids:
             shard_path = os.path.join(
@@ -79,6 +80,8 @@ class ClassificationDataset(Dataset):
             with h5py.File(shard_path, "r") as f:
                 if first_file:
                     self.time_resolution_s = f.attrs.get("time_resolution_s", 1e-11)
+                    self.origin            = f.attrs.get("origin", "sy")
+                    self.root_id           = f.attrs.get("root_id", "UNKN")
                     first_file = False
                     
                 if "labels" not in f or f["labels"].shape[1] == 0:
@@ -93,6 +96,7 @@ class ClassificationDataset(Dataset):
                     int(labels[self.ROW_START_IDX,  k]),
                     int(labels[self.ROW_END_IDX,    k]),
                     int(labels[self.ROW_CLASS_ID,   k]),
+                    int(labels[self.ROW_PULSE_ID,   k]),
                 ))
 
     # ------------------------------------------------------------------ #
@@ -127,7 +131,7 @@ class ClassificationDataset(Dataset):
         return len(self.index)
 
     def __getitem__(self, idx: int):
-        shard_path, scene_idx, ch_idx, start_idx, end_idx, class_id = self.index[idx]
+        shard_path, scene_idx, ch_idx, start_idx, end_idx, class_id, gt_inst_id = self.index[idx]
 
         with h5py.File(shard_path, "r") as f:
             # Clamp indices to valid range
