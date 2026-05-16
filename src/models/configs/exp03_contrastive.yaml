@@ -7,12 +7,12 @@
 experiment:
   name: "exp03_contrastive"
   description: "Triplet Margin Loss for Instance Grouping + PD Classification."
-  parent_node_id: "UNKN" # Should be updated to the ID of your multi-channel dataset
+  parent_node_id: "ShmH"
   origin: "sy"
   task_type: "contrastive"
 
 data:
-  root_path: "data/raw/synthesised/UNKN" # Should be updated to the path of your multi-channel dataset
+  root_path: "data/raw/synthesised/20260427_170034_sy-ShmH-ShmH"
   train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
   val_shards: [17, 18, 19, 20]
   max_pulse_len: 4096
