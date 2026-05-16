@@ -1,0 +1,41 @@
+# =============================================================================
+# Experiment Configuration: exp03_contrastive
+# Model  : 1D CNN Backbone (Contrastive) + Linear Head
+# Task   : Joint Contrastive Embedding (Triplet Loss) + Classification
+# =============================================================================
+
+experiment:
+  name: "exp03_contrastive"
+  description: "Triplet Margin Loss for Instance Grouping + PD Classification."
+  parent_node_id: "ShmH"
+  origin: "sy"
+  task_type: "contrastive"
+
+data:
+  root_path: "data/raw/synthesised/20260427_170034_sy-ShmH-ShmH"
+  train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  val_shards: [17, 18, 19, 20]
+  max_pulse_len: 4096
+
+model:
+  in_channels: 1
+  base_channels: 16
+  embedding_dim: 128
+
+task:
+  num_classes: 2
+  margin: 1.0
+  lambda_triplet: 1.0
+  lambda_cls: 1.0
+
+training:
+  device: "auto"
+  batch_size: 64
+  learning_rate: 0.001
+  epochs: 10
+
+output:
+  weights_dir: "models/weights"
+  config_snapshot_dir: "models/configuration_snapshots"
+  results_dir: "data/classification_output/exp03_contrastive"
+  eval_dir: "data/performance_evaluation/classification/exp03_contrastive"
