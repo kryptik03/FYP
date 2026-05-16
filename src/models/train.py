@@ -120,18 +120,27 @@ def _build_datasets_and_task(config: dict, task_type: str):
         from src.models.data.dataset_exp04_dec import DECDataset
         from src.models.tasks.task_exp04_dec   import DECTask
         sources = data_cfg["sources"]
+        # Read wavelet denoising settings from config (with safe defaults)
+        wavelet_kwargs = dict(
+            denoise        = data_cfg.get("denoise",        True),
+            wavelet        = data_cfg.get("wavelet",        "db4"),
+            wavelet_level  = data_cfg.get("wavelet_level",  4),
+            threshold_mode = data_cfg.get("threshold_mode", "soft"),
+        )
         # Phase 1 uses augmented pairs (SimCLR)
         train_ds = DECDataset(
             sources       = sources,
             shard_key     = "train_shards",
             max_pulse_len = data_cfg["max_pulse_len"],
             augment       = True,
+            **wavelet_kwargs,
         )
         val_ds = DECDataset(
             sources       = sources,
             shard_key     = "val_shards",
             max_pulse_len = data_cfg["max_pulse_len"],
             augment       = True,   # Symmetric validation during Phase 1
+            **wavelet_kwargs,
         )
         task = DECTask(config)
 

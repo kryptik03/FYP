@@ -36,6 +36,13 @@ data:
       val_shards: [17, 18, 19, 20]
   max_pulse_len: 4096
 
+  # Wavelet denoising applied to each pulse before it reaches the model.
+  # Set denoise: false to disable entirely.
+  denoise: true
+  wavelet: "db4"        # PyWavelets wavelet family (db4 is good for sharp transients)
+  wavelet_level: 3      # DWT decomposition depth (higher = removes lower frequencies too)
+  threshold_mode: "soft" # "soft" rounds coefficients to zero smoothly; "hard" cuts abruptly
+
 model:
   in_channels: 1
   base_channels: 32        # Larger than exp03 for richer features

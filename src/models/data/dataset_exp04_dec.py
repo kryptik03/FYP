@@ -27,6 +27,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+try:
+    import pywt
+    _PYWT_AVAILABLE = True
+except ImportError:
+    _PYWT_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
 # Signal Augmentation Utilities (used in SimCLR Phase 1)
@@ -82,10 +88,22 @@ class DECDataset(Dataset):
         shard_key: str,         # "train_shards" or "val_shards"
         max_pulse_len: int = 4096,
         augment: bool = False,  # True for SimCLR Phase 1
+        denoise: bool = True,   # Apply wavelet denoising before returning signal
+        wavelet: str = "db4",   # PyWavelets wavelet family
+        wavelet_level: int = 4, # Decomposition level
+        threshold_mode: str = "soft",  # "soft" or "hard" thresholding
     ):
         super().__init__()
-        self.max_pulse_len = max_pulse_len
-        self.augment       = augment
+        self.max_pulse_len   = max_pulse_len
+        self.augment         = augment
+        self.denoise         = denoise and _PYWT_AVAILABLE
+        self.wavelet         = wavelet
+        self.wavelet_level   = wavelet_level
+        self.threshold_mode  = threshold_mode
+
+        if denoise and not _PYWT_AVAILABLE:
+            print("[DECDataset] Warning: pywt not installed. Wavelet denoising disabled. "
+                  "Run: pip install PyWavelets")
 
         # Flat index: (shard_path, scene_idx, ch_idx, start_idx, end_idx, class_id, inst_id, time_res)
         self.index: list[tuple] = []
@@ -98,7 +116,8 @@ class DECDataset(Dataset):
             root_path  = os.path.abspath(source["path"])
             shard_ids  = source.get(shard_key, [])
 
-            prefix = "synth_shard" if src_type == "synthesized" else "measured_shard"
+            # Accept both spellings: "synthesised" (British) and "synthesized" (American)
+            prefix = "synth_shard" if src_type in ("synthesized", "synthesised") else "measured_shard"
 
             for shard_id in shard_ids:
                 shard_path = os.path.join(root_path, f"{prefix}_{shard_id:02d}.h5")
@@ -129,6 +148,39 @@ class DECDataset(Dataset):
     # Signal Helpers                                                            #
     # ----------------------------------------------------------------------- #
 
+    @staticmethod
+    def _wavelet_denoise(
+        signal: np.ndarray,
+        wavelet: str,
+        level: int,
+        mode: str,
+    ) -> np.ndarray:
+        """
+        Denoise a 1-D signal using Discrete Wavelet Transform (DWT) thresholding.
+
+        Steps:
+          1. Decompose the signal into approximation + detail coefficients.
+          2. Estimate the noise floor from the finest detail coefficients
+             using the median absolute deviation (MAD) estimator.
+          3. Apply soft/hard thresholding to suppress sub-threshold detail
+             coefficients (noise), leaving only significant transients.
+          4. Reconstruct the signal from the thresholded coefficients.
+        """
+        coeffs = pywt.wavedec(signal, wavelet, level=level)
+
+        # Noise estimate from the finest-scale detail (coeffs[-1])
+        sigma = np.median(np.abs(coeffs[-1])) / 0.6745   # MAD estimator
+        threshold = sigma * np.sqrt(2 * np.log(len(signal)))
+
+        # Threshold all detail coefficient arrays (leave approximation unchanged)
+        denoised_coeffs = [coeffs[0]]  # Keep approximation as-is
+        for detail in coeffs[1:]:
+            denoised_coeffs.append(
+                pywt.threshold(detail, value=threshold, mode=mode)
+            )
+
+        return pywt.waverec(denoised_coeffs, wavelet).astype(np.float32)
+
     def _pad_or_crop(self, signal: np.ndarray) -> np.ndarray:
         L = len(signal)
         if L >= self.max_pulse_len:
@@ -150,6 +202,11 @@ class DECDataset(Dataset):
             s = max(0, min(start_idx, n - 1))
             e = max(s + 1, min(end_idx + 1, n))
             sig = f["scenes"][scene_idx, ch_idx, s:e].astype(np.float32)
+
+        # Wavelet denoising applied BEFORE padding/normalisation
+        if self.denoise:
+            sig = self._wavelet_denoise(sig, self.wavelet, self.wavelet_level, self.threshold_mode)
+
         sig = self._pad_or_crop(sig)
         sig = self._normalise(sig)
         return sig
