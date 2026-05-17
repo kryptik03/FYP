@@ -9,7 +9,7 @@ h5py>=3.10.0
 PyYAML>=6.0.0
 
 # Waveform Analysis
-pywt
+PyWavelets>=1.4.0
 
 # Misc
 tqdm>=4.67.3
