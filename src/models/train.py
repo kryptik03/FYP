@@ -434,16 +434,19 @@ def main():
                   f"Train KL: {train_losses['kl_div']:.4f} | "
                   f"Val KL: {val_metrics['kl_div']:.4f} | {elapsed:.1f}s")
 
-            if val_metrics["total"] < best_val_loss_p2:
-                best_val_loss_p2 = val_metrics["total"]
-                best_epoch = phase1_epochs + epoch
-                task.save_checkpoint(best_epoch, node_id,
-                    os.path.abspath(out_cfg["weights_dir"]),
-                    os.path.abspath(out_cfg["config_snapshot_dir"]),
-                    config_path)
-                print(f"    ^ New best Phase2 val KL: {best_val_loss_p2:.4f}")
+            # DEC Phase 2: KL loss ALWAYS increases by design (see task_exp04_dec.py).
+            # "Best checkpoint" logic based on lowest val KL is meaningless here —
+            # it would always save epoch 1. Instead, save every epoch and keep the last,
+            # which has the most refined, highest-confidence cluster assignments.
+            best_epoch = phase1_epochs + epoch
+            task.save_checkpoint(best_epoch, node_id,
+                os.path.abspath(out_cfg["weights_dir"]),
+                os.path.abspath(out_cfg["config_snapshot_dir"]),
+                config_path)
+            if epoch == phase2_epochs:
+                print(f"    ^ Final Phase2 checkpoint saved (epoch {best_epoch}).")
 
-        best_val_loss = best_val_loss_p2
+        best_val_loss = val_metrics["total"]   # Report the final epoch's val KL
 
     # ----------------------------------------------------------------------- #
     # Standard single-phase training (detection / classification / contrastive)#
