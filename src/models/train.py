@@ -67,11 +67,11 @@ def _build_datasets_and_task(config: dict, task_type: str):
     Add new elif branches here as new task types are implemented.
     """
     data_cfg  = config["data"]
-    root_path = os.path.abspath(data_cfg["root_path"])
-
+    
     if task_type == "detection":
         from src.models.data.dataset_exp01 import DetectionDataset
         from src.models.tasks.task_exp01   import DetectionTask
+        root_path = os.path.abspath(data_cfg["root_path"])
         train_ds = DetectionDataset(
             root_path         = root_path,
             shard_ids         = data_cfg["train_shards"],
@@ -89,6 +89,7 @@ def _build_datasets_and_task(config: dict, task_type: str):
     elif task_type == "classification":
         from src.models.data.dataset_exp02 import ClassificationDataset
         from src.models.tasks.task_exp02   import ClassificationTask
+        root_path = os.path.abspath(data_cfg["root_path"])
         train_ds = ClassificationDataset(
             root_path     = root_path,
             shard_ids     = data_cfg["train_shards"],
@@ -104,6 +105,7 @@ def _build_datasets_and_task(config: dict, task_type: str):
     elif task_type == "contrastive":
         from src.models.data.dataset_exp03_contrastive import ContrastiveDataset
         from src.models.tasks.task_exp03_contrastive   import ContrastiveTask
+        root_path = os.path.abspath(data_cfg["root_path"])
         train_ds = ContrastiveDataset(
             root_path     = root_path,
             shard_ids     = data_cfg["train_shards"],
