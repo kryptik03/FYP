@@ -106,6 +106,71 @@ def trace_lineage(node_id):
     else:
         print(f"[Error] Node {node_id} not found.")
 
+
+def describe_node(node_id):
+    """Displays a highly detailed hierarchical database metadata report for the selected node and all its descendants (leaves)."""
+    if not os.path.exists(DB_PATH):
+        print("[Error] Database not found.")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT node_id, parent_id, root_id, origin, stage, method, folder_path, nickname, timestamp, history_log 
+        FROM nodes
+    """)
+    all_rows = cursor.fetchall()
+    conn.close()
+
+    # Build node maps and parent-child adjacency list
+    nodes_by_id = {row[0]: row for row in all_rows}
+    if node_id not in nodes_by_id:
+        print(f"[Error] Node '{node_id}' does not exist in the lineage database.")
+        return
+
+    from collections import defaultdict
+    children_map = defaultdict(list)
+    for row in all_rows:
+        pid = row[1]
+        nid = row[0]
+        children_map[pid].append(nid)
+
+    # Perform a Depth-First Search (DFS) starting from the selected node to get descendants with depth
+    traversal_order = []
+    def dfs(current_id, depth=0):
+        traversal_order.append((current_id, depth))
+        for child_id in children_map[current_id]:
+            dfs(child_id, depth + 1)
+
+    dfs(node_id)
+
+    print("\n" + "="*80)
+    print(f" LINEAGE METADATA REPORT: Hierarchy of '{node_id}' ({len(traversal_order)} node(s)) ".center(80, "="))
+    print("="*80)
+
+    for nid, depth in traversal_order:
+        row = nodes_by_id[nid]
+        _, pid, rid, origin, stage, method, path, nickname, ts, history = row
+        
+        indent = "    " * depth
+        prefix = f"ROOT NODE: {nid}" if depth == 0 else f"{indent}+-- CHILD NODE: {nid}"
+        
+        print(f"\n{prefix}")
+        print(f"{indent}  -------------------------------------------------------------")
+        print(f"{indent}  Node ID     : {nid}")
+        print(f"{indent}  Parent ID   : {pid}")
+        print(f"{indent}  Root ID     : {rid}")
+        print(f"{indent}  Origin      : {origin.upper()}")
+        print(f"{indent}  Stage       : {stage.upper()}")
+        print(f"{indent}  Method      : {method}")
+        print(f"{indent}  Nickname    : '{nickname}'")
+        print(f"{indent}  Timestamp   : {ts}")
+        print(f"{indent}  Folder Path : {path}")
+        print(f"{indent}  History Log : {history}")
+        print(f"{indent}  -------------------------------------------------------------")
+        
+    print("="*80 + "\n")
+
 def prune_node(node_id):
     """Safely deletes a node's folder and removes it from the database."""
     conn = sqlite3.connect(DB_PATH)
@@ -235,12 +300,41 @@ def visualize_tree(root_id):
     print_node(root_id)
     print("==================================\n")
 
+
+def visualize_all():
+    """Fetches all root datasets and visualizes the tree structure for each of them."""
+    if not os.path.exists(DB_PATH):
+        print("Database not found.")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT node_id, nickname 
+        FROM nodes 
+        WHERE parent_id = 'NONE'
+        ORDER BY timestamp DESC
+    """)
+    roots = cursor.fetchall()
+    conn.close()
+
+    if not roots:
+        print("No root datasets found to visualize.")
+        return
+
+    print(f"\n=== Visualizing All Lineage Trees ({len(roots)} root(s) found) ===")
+    for r in roots:
+        root_id, nickname = r
+        visualize_tree(root_id)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="FYP Lineage Tracker CLI")
     
-    # NEW: Added 'visualize' and 'prune' to the choices
-    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune', 'register_process', 'roots'], default='init')
+    # NEW: Added 'all' and 'inspect' to the choices
+    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune', 'register_process', 'roots', 'all', 'inspect'], default='init')
     
     parser.add_argument('--origin', type=str)
     parser.add_argument('--method', type=str)
@@ -280,3 +374,10 @@ if __name__ == "__main__":
             prune_node(args.node_id)
     elif args.action == 'roots':
         list_roots()
+    elif args.action == 'all':
+        visualize_all()
+    elif args.action == 'inspect':
+        if not args.node_id:
+            print("Error: --node_id is required for inspection.")
+        else:
+            describe_node(args.node_id)

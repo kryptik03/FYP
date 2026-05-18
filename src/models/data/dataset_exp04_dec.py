@@ -130,7 +130,7 @@ class DECDataset(Dataset):
                         continue
 
                     labels = f["labels"][:]          # Expected (7, N_pulses) — MATLAB format
-                    time_res = float(f.attrs.get("time_resolution_s", 1e-11))
+                    time_res = float(np.array(f.attrs.get("time_resolution_s", 1e-11)).item())
 
                 for k in range(labels.shape[1]):
                     self.index.append((

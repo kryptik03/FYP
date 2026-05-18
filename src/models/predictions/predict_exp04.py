@@ -1,31 +1,18 @@
 """
 predict_exp04.py
 ================
-Inference script for exp04 Deep Embedded Clustering (DEC).
-
-What this script does:
-1. Loads the trained DEC checkpoint (backbone + cluster centroids).
-2. Extracts 128-D embeddings for every pulse in the dataset.
-3. Runs HDBSCAN to discover the number of clusters automatically (no predefined K).
-4. Performs post-hoc label alignment: maps HDBSCAN cluster IDs to real PD class names
-   by majority voting against the ground-truth class_id in the dataset.
-5. Groups pulses into PD instances (same physical discharge event) using:
-   a) Temporal proximity: pulses within `time_threshold` of each other.
-   b) Embedding proximity: L2 distance < `dist_threshold` in embedding space.
-6. Saves results to the standardized output folder and registers in lineage.db.
+Inference + Visualization script for exp04 Deep Embedded Clustering (DEC).
 
 Usage:
-    python src/models/predictions/predict_exp04.py \\
-        --checkpoint_id <NodeID> \\
-        --input_sources "data/raw/measured/FOLDER:measured:1,2,3" \\
-        [--time_threshold 100e-9] \\
-        [--dist_threshold 0.5] \\
-        [--min_cluster_size 5] \\
-        [--smoke_test]
+    python src/models/predictions/predict_exp04.py \
+        --checkpoint_id vWIh \
+        --source "data/raw/synthesised/20260427_170034_sy-ShmH-ShmH:synthesised:17,18,19,20" \
+        --source "data/raw/measured/20260517_004832_ms-K7FX-K7FX:measured:17,18,19,20" \
+        [--time_threshold 100e-9] \
+        [--dist_threshold 0.5] \
+        [--min_cluster_size 5]
 
-Note: --input_sources accepts semicolon-separated sources in the format:
-    path:type:shard1,shard2,...
-    Example: "data/raw/measured/FOLDER:measured:1,2,3;data/raw/synth/FOLDER:synthesized:17,18,19"
+Each --source is formatted as: path:type:shard1,shard2,...
 """
 
 import argparse
@@ -40,6 +27,11 @@ from datetime import datetime
 import h5py
 import numpy as np
 import torch
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+from sklearn.metrics import silhouette_score
 from torch.utils.data import DataLoader
 
 _SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -51,396 +43,444 @@ from src.models.tasks.task_exp04_dec import DECTask
 from src.models.data.dataset_exp04_dec import DECDataset
 from src.utils.lineage_tracker import register_process
 
+# ---------------------------------------------------------------------------
+# Class name mapping (PD type index -> human-readable label)
+# ---------------------------------------------------------------------------
+CLASS_NAMES = {
+    0: "PD1 Void",
+    1: "PD2 Incision",
+    2: "PD3 Delamination",
+    3: "PD4 FeOx",
+    4: "PD5 FeOx High",
+}
 
 # ---------------------------------------------------------------------------
-# Checkpoint Loading
+# Helpers
 # ---------------------------------------------------------------------------
 
-def load_config_for_checkpoint(checkpoint_id: str) -> dict:
+def load_config(checkpoint_id: str) -> dict:
     import yaml
-    config_dir = os.path.abspath("models/configuration_snapshots")
-    config_path = os.path.join(config_dir, f"config_{checkpoint_id}.yaml")
-    if not os.path.exists(config_path):
-        print(f"[Error] Config snapshot not found: {config_path}")
-        sys.exit(1)
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
-    print(f"[Checkpoint] Config  : {config_path}")
-    return config
-
+    p = os.path.abspath(f"models/configuration_snapshots/config_{checkpoint_id}.yaml")
+    if not os.path.exists(p):
+        print(f"[Error] Config not found: {p}"); sys.exit(1)
+    with open(p) as f:
+        return yaml.safe_load(f)
 
 def load_weights(checkpoint_id: str, task: DECTask):
-    weights_dir = os.path.abspath("models/weights")
-    weight_path = os.path.join(weights_dir, f"model_{checkpoint_id}.pt")
-    if not os.path.exists(weight_path):
-        print(f"[Error] Weights not found: {weight_path}")
-        sys.exit(1)
-    ckpt = torch.load(weight_path, map_location="cpu", weights_only=False)
+    p = os.path.abspath(f"models/weights/model_{checkpoint_id}.pt")
+    if not os.path.exists(p):
+        print(f"[Error] Weights not found: {p}"); sys.exit(1)
+    ckpt = torch.load(p, map_location="cpu", weights_only=False)
     task.load_state_dict(ckpt["model_state"])
-    print(f"[Checkpoint] Weights : {weight_path}")
-    print(f"[Checkpoint] Epoch   : {ckpt.get('epoch', '?')}")
+    print(f"[Checkpoint] Loaded {p}  (epoch {ckpt.get('epoch','?')})")
 
-
-def select_device(device_cfg: str) -> torch.device:
-    if device_cfg == "auto":
+def select_device(cfg: str) -> torch.device:
+    if cfg == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(device_cfg)
+    return torch.device(cfg)
 
+def parse_sources(raw_list: list[str]) -> list[dict]:
+    sources = []
+    for raw in raw_list:
+        tokens = raw.strip().split(":")
+        if len(tokens) < 3:
+            print(f"[Error] Bad source format: '{raw}'. Use path:type:shards")
+            sys.exit(1)
+        path   = tokens[0]
+        stype  = tokens[1]
+        shards = [int(x) for x in tokens[2].split(",") if x.strip()]
+        sources.append({"type": stype, "path": path,
+                        "train_shards": shards, "val_shards": shards})
+    return sources
 
 # ---------------------------------------------------------------------------
 # Feature Extraction
 # ---------------------------------------------------------------------------
 
-def extract_features(task: DECTask, loader: DataLoader, dataset: DECDataset,
-                     device: torch.device) -> list[dict]:
-    """Extract embeddings and soft cluster assignments for all pulses."""
+def extract_features(task, loader, dataset, device) -> list[dict]:
     task.eval()
     features = []
-    sample_idx = 0
-
     with torch.no_grad():
-        for batch in loader:
-            signal = batch[0].to(device)
-            z, q = task(signal)
+        for batch_idx, batch in enumerate(loader):
+            sig = batch[0].to(device)
+            z, q = task(sig)
             z = z.cpu().numpy()
             q = q.cpu().numpy()
-            B = signal.shape[0]
-
-            for b in range(B):
-                flat_idx = sample_idx + b
-                shard_path, scene_idx, ch_idx, start_idx, end_idx, class_id, inst_id, time_res = dataset.index[flat_idx]
+            for b in range(sig.shape[0]):
+                global_idx = batch_idx * loader.batch_size + b
+                if global_idx >= len(dataset.index):
+                    break
+                shard_path, scene_idx, ch_idx, start_idx, end_idx, class_id, inst_id, time_res = dataset.index[global_idx]
                 features.append({
                     "shard_path": shard_path,
                     "scene_idx":  scene_idx,
                     "ch_idx":     ch_idx,
                     "start_idx":  start_idx,
-                    "end_idx":    end_idx,
                     "gt_class_id": class_id,
                     "gt_inst_id":  inst_id,
                     "time_res":   time_res,
                     "emb":        z[b],
                     "soft_q":     q[b],
                 })
-            sample_idx += B
-
-    print(f"[Inference] Extracted features for {len(features)} pulses.")
+    print(f"[Inference] Extracted {len(features)} pulse embeddings.")
     return features
-
 
 # ---------------------------------------------------------------------------
 # HDBSCAN Clustering
 # ---------------------------------------------------------------------------
 
-def run_hdbscan(features: list[dict], min_cluster_size: int = 5) -> np.ndarray:
-    """Run HDBSCAN on embeddings. Returns cluster labels (-1 = noise)."""
+def run_hdbscan(features, min_cluster_size=5) -> np.ndarray:
     try:
         import hdbscan
     except ImportError:
-        print("[Error] hdbscan not installed. Run: pip install hdbscan")
-        sys.exit(1)
-
+        print("[Error] hdbscan not installed. Run: pip install hdbscan"); sys.exit(1)
     embs = np.array([f["emb"] for f in features])
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric="euclidean")
     labels = clusterer.fit_predict(embs)
-
     n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    n_noise    = (labels == -1).sum()
-    print(f"[HDBSCAN] Found {n_clusters} clusters | Noise points: {n_noise}")
+    print(f"[HDBSCAN]   Clusters found: {n_clusters}  |  Noise points: {(labels==-1).sum()}")
     return labels
 
-
 # ---------------------------------------------------------------------------
-# Post-Hoc Label Alignment
+# Post-hoc cluster -> class alignment
 # ---------------------------------------------------------------------------
 
-def align_clusters_to_classes(features: list[dict], hdb_labels: np.ndarray) -> dict[int, int]:
-    """
-    Map each HDBSCAN cluster ID to the most common ground-truth class_id
-    in that cluster (majority voting). Labels are never used during training —
-    this is a post-hoc evaluation and naming step only.
-    Returns: {hdb_cluster_id -> gt_class_id}
-    """
-    cluster_votes = defaultdict(list)
-    for feat, label in zip(features, hdb_labels):
-        if label != -1:
-            cluster_votes[label].append(feat["gt_class_id"])
-
-    mapping = {}
-    for cluster_id, votes in cluster_votes.items():
-        # Majority vote
-        mapping[cluster_id] = max(set(votes), key=votes.count)
-    mapping[-1] = -1   # Noise points stay as -1
+def align_clusters(features, hdb_labels) -> dict:
+    votes = defaultdict(list)
+    for feat, lbl in zip(features, hdb_labels):
+        if lbl != -1:
+            votes[lbl].append(feat["gt_class_id"])
+    mapping = {k: max(set(v), key=v.count) for k, v in votes.items()}
+    mapping[-1] = -1
     return mapping
 
-
 # ---------------------------------------------------------------------------
-# PD Instance Grouping (same as exp03 logic)
+# PD Instance Grouping
 # ---------------------------------------------------------------------------
 
-def group_into_pd_instances(features: list[dict], hdb_labels: np.ndarray,
-                             time_threshold: float, dist_threshold: float) -> list[dict]:
-    """
-    Two-step PD instance grouping:
-    1. Temporal filter: only compare pulses within `time_threshold` of each other.
-    2. Embedding filter: group if L2 distance in embedding space < `dist_threshold`.
-    """
-    results = []
+def group_pd_instances(features, hdb_labels, time_th, dist_th) -> list[dict]:
     scene_groups = defaultdict(list)
     for i, feat in enumerate(features):
-        key = (feat["shard_path"], feat["scene_idx"])
-        scene_groups[key].append((i, feat, hdb_labels[i]))
+        scene_groups[(feat["shard_path"], feat["scene_idx"])].append((i, feat))
 
-    instance_id_counter = 0
-    for scene_pulses in scene_groups.values():
-        assigned = {}
+    results = []
+    inst_counter = 0
+    assigned_global = {}
 
-        for i, (idx, feat, _) in enumerate(scene_pulses):
-            if idx in assigned:
+    for pulses in scene_groups.values():
+        for i, (idx, feat) in enumerate(pulses):
+            if idx in assigned_global:
                 continue
-            instance_id_counter += 1
-            group = [idx]
-            assigned[idx] = instance_id_counter
+            inst_counter += 1
+            assigned_global[idx] = inst_counter
             t_i = feat["start_idx"] * feat["time_res"]
-
-            for j, (jdx, feat_j, _) in enumerate(scene_pulses):
-                if i == j or jdx in assigned:
+            for j, (jdx, feat_j) in enumerate(pulses):
+                if i == j or jdx in assigned_global:
                     continue
                 t_j = feat_j["start_idx"] * feat_j["time_res"]
-                if abs(t_i - t_j) > time_threshold:
+                if abs(t_i - t_j) > time_th:
                     continue
-                d = np.linalg.norm(feat["emb"] - feat_j["emb"])
-                if d < dist_threshold:
-                    group.append(jdx)
-                    assigned[jdx] = instance_id_counter
+                if np.linalg.norm(feat["emb"] - feat_j["emb"]) < dist_th:
+                    assigned_global[jdx] = inst_counter
 
-        for idx, inst_id in assigned.items():
-            feat = features[idx]
-            results.append({**feat, "pred_inst_id": inst_id})
-
+    for i, feat in enumerate(features):
+        results.append({**feat,
+                        "hdb_cluster": int(hdb_labels[i]),
+                        "pred_inst_id": assigned_global.get(i, -1)})
     return results
-
-
-# ---------------------------------------------------------------------------
-# Output Saving
-# ---------------------------------------------------------------------------
-
-def save_results(results: list[dict], hdb_labels: np.ndarray,
-                 cluster_map: dict, out_dir: str, node_id: str) -> str:
-    os.makedirs(out_dir, exist_ok=True)
-    out_h5 = os.path.join(out_dir, f"results_{node_id}.h5")
-
-    dt = np.dtype([
-        ("scene_idx",    np.int32),
-        ("ch_idx",       np.int32),
-        ("start_idx",    np.int32),
-        ("end_idx",      np.int32),
-        ("gt_class_id",  np.int32),
-        ("gt_inst_id",   np.int32),
-        ("hdb_cluster",  np.int32),
-        ("pred_class_id",np.int32),
-        ("pred_inst_id", np.int32),
-    ])
-
-    arr = np.empty(len(results), dtype=dt)
-    for i, r in enumerate(results):
-        hdb_lbl = hdb_labels[i] if i < len(hdb_labels) else -1
-        pred_cls = cluster_map.get(hdb_lbl, -1)
-        arr[i] = (
-            r["scene_idx"], r["ch_idx"], r["start_idx"], r["end_idx"],
-            r["gt_class_id"], r["gt_inst_id"],
-            hdb_lbl, pred_cls, r["pred_inst_id"],
-        )
-
-    with h5py.File(out_h5, "w") as f:
-        ds = f.create_dataset("predictions", data=arr, compression="gzip")
-        ds.attrs["description"] = "HDBSCAN cluster IDs + post-hoc class alignment + PD instance grouping"
-
-    print(f"[Output] Saved predictions to {out_h5}")
-    return out_h5
-
 
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
 
-def compute_metrics(results: list[dict], hdb_labels: np.ndarray,
-                    cluster_map: dict) -> dict:
+def compute_metrics(results, hdb_labels, cluster_map) -> dict:
+    embs   = np.array([r["emb"] for r in results])
     y_true = np.array([r["gt_class_id"] for r in results])
-    y_pred = np.array([cluster_map.get(hdb_labels[i], -1) for i in range(len(results))])
+    y_pred = np.array([cluster_map.get(int(hdb_labels[i]), -1) for i in range(len(results))])
 
-    # Exclude noise points (-1) from classification accuracy
     valid = y_pred != -1
-    acc = (y_true[valid] == y_pred[valid]).mean() if valid.sum() > 0 else 0.0
+    acc   = float((y_true[valid] == y_pred[valid]).mean()) if valid.sum() > 0 else 0.0
 
-    # Grouping metrics (pair-based)
-    tp_pairs = total_gt_pairs = total_pred_pairs = 0
-    eval_scenes = defaultdict(list)
+    # Silhouette (only if >1 cluster and not all noise)
+    sil = -1.0
+    unique_lbls = set(hdb_labels) - {-1}
+    if len(unique_lbls) > 1 and valid.sum() > 1:
+        try:
+            sil = float(silhouette_score(embs[valid], hdb_labels[valid]))
+        except Exception:
+            pass
+
+    # Pair-based grouping
+    tp = total_gt = total_pred = 0
+    scenes = defaultdict(list)
     for r in results:
-        eval_scenes[(r["shard_path"], r["scene_idx"])].append(r)
-
-    for pulses in eval_scenes.values():
+        scenes[(r["shard_path"], r["scene_idx"])].append(r)
+    for pulses in scenes.values():
         n = len(pulses)
         for i in range(n):
-            for j in range(i + 1, n):
-                gt_same   = (pulses[i]["gt_inst_id"]   == pulses[j]["gt_inst_id"])
-                pred_same = (pulses[i]["pred_inst_id"]  == pulses[j]["pred_inst_id"])
-                if gt_same:   total_gt_pairs += 1
-                if pred_same: total_pred_pairs += 1
-                if gt_same and pred_same: tp_pairs += 1
+            for j in range(i+1, n):
+                gs = pulses[i]["gt_inst_id"]  == pulses[j]["gt_inst_id"]
+                ps = pulses[i]["pred_inst_id"] == pulses[j]["pred_inst_id"]
+                if gs: total_gt += 1
+                if ps: total_pred += 1
+                if gs and ps: tp += 1
 
-    group_recall    = tp_pairs / total_gt_pairs   if total_gt_pairs   > 0 else 1.0
-    group_precision = tp_pairs / total_pred_pairs if total_pred_pairs > 0 else 1.0
-    group_f1 = (2 * group_precision * group_recall /
-                (group_precision + group_recall)) if (group_precision + group_recall) > 0 else 0.0
+    prec = tp / total_pred if total_pred > 0 else 1.0
+    rec  = tp / total_gt   if total_gt   > 0 else 1.0
+    f1   = 2*prec*rec / (prec+rec) if (prec+rec) > 0 else 0.0
 
-    n_clusters_found = len(set(hdb_labels)) - (1 if -1 in hdb_labels else 0)
-    n_noise = (hdb_labels == -1).sum()
+    n_clusters = len(set(hdb_labels)) - (1 if -1 in hdb_labels else 0)
 
     return {
-        "classification_accuracy": float(acc),
-        "grouping_recall":         float(group_recall),
-        "grouping_precision":      float(group_precision),
-        "grouping_f1":             float(group_f1),
-        "n_pulses":                len(results),
-        "n_clusters_found":        int(n_clusters_found),
-        "n_noise_points":          int(n_noise),
-        "n_gt_instances":          len(set((r["shard_path"], r["gt_inst_id"]) for r in results)),
-        "n_pred_instances":        len(set(r["pred_inst_id"] for r in results)),
+        "classification_accuracy":  acc,
+        "silhouette_score":         sil,
+        "grouping_precision":       prec,
+        "grouping_recall":          rec,
+        "grouping_f1":              f1,
+        "n_pulses":                 len(results),
+        "n_clusters_found":         int(n_clusters),
+        "n_noise_points":           int((hdb_labels == -1).sum()),
+        "n_gt_instances":           len(set((r["shard_path"], r["gt_inst_id"]) for r in results)),
+        "n_pred_instances":         len(set(r["pred_inst_id"] for r in results)),
     }
 
-
 # ---------------------------------------------------------------------------
-# CLI
+# Visualization
 # ---------------------------------------------------------------------------
 
-def parse_input_sources(raw: str) -> list[dict]:
+PALETTE = [
+    "#E63946", "#457B9D", "#2A9D8F", "#E9C46A", "#F4A261",
+    "#6A0572", "#118AB2", "#06D6A0", "#FFD166", "#EF476F",
+    "#8338EC", "#3A86FF", "#FB5607",
+]
+
+def _tsne_2d(embs: np.ndarray) -> np.ndarray:
+    print("[t-SNE] Reducing to 2D (this may take a moment)...")
+    perp = min(30, max(5, len(embs) // 10))
+    return TSNE(n_components=2, perplexity=perp, random_state=42,
+                max_iter=1000).fit_transform(embs)
+
+def plot_embeddings(results, hdb_labels, cluster_map, out_dir: str):
     """
-    Parse semicolon-separated sources of the form:
-        path:type:shard1,shard2,...
+    Figure 1: Two-panel t-SNE scatter.
+      Left  — coloured by Ground-Truth Class  (what the labels say)
+      Right — coloured by HDBSCAN Cluster     (what the model discovered)
+    Suitable for the extended abstract.
     """
-    sources = []
-    for part in raw.split(";"):
-        part = part.strip()
-        if not part:
+    embs = np.array([r["emb"] for r in results])
+    xy   = _tsne_2d(embs)
+
+    gt_classes  = np.array([r["gt_class_id"]    for r in results])
+    hdb_arr     = np.array([r["hdb_cluster"]     for r in results])
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig.patch.set_facecolor("#0F0F0F")
+
+    ax_titles = ["Ground-Truth Class Labels", "HDBSCAN Discovered Clusters"]
+    label_arrays = [gt_classes, hdb_arr]
+
+    for ax, arr, title in zip(axes, label_arrays, ax_titles):
+        ax.set_facecolor("#1A1A2E")
+        unique = sorted(set(arr))
+        for k, uid in enumerate(unique):
+            mask = arr == uid
+            color = "#888888" if uid == -1 else PALETTE[k % len(PALETTE)]
+            label = "Noise" if uid == -1 else (
+                CLASS_NAMES.get(uid, f"Class {uid}") if title.startswith("Ground") else f"Cluster {uid}"
+            )
+            ax.scatter(xy[mask, 0], xy[mask, 1], c=color, s=10,
+                       alpha=0.7, label=label, linewidths=0)
+        ax.set_title(title, color="white", fontsize=12, fontweight="bold", pad=10)
+        ax.tick_params(colors="#888888")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#333333")
+        ax.set_xlabel("t-SNE Dim 1", color="#888888", fontsize=9)
+        ax.set_ylabel("t-SNE Dim 2", color="#888888", fontsize=9)
+        leg = ax.legend(fontsize=7.5, framealpha=0.3,
+                        labelcolor="white", facecolor="#0F0F0F",
+                        loc="best", markerscale=2)
+
+    plt.suptitle("exp04 DEC — Embedding Space Visualisation (t-SNE)",
+                 color="white", fontsize=14, fontweight="bold", y=1.01)
+    plt.tight_layout()
+
+    out_path = os.path.join(out_dir, "fig1_tsne_embedding.png")
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"[Plot] Saved -> {out_path}")
+    return out_path
+
+def plot_cluster_composition(results, hdb_labels, cluster_map, out_dir: str):
+    """
+    Figure 2: Stacked bar chart showing what GT classes make up each HDBSCAN cluster.
+    Demonstrates how well the discovered clusters align with real PD types.
+    """
+    unique_clusters = sorted(set(hdb_labels) - {-1})
+    unique_classes  = sorted(CLASS_NAMES.keys())
+
+    # Build composition matrix: [cluster, class] -> count
+    comp = np.zeros((len(unique_clusters), len(unique_classes)), dtype=int)
+    for r, lbl in zip(results, hdb_labels):
+        if lbl == -1:
             continue
-        tokens = part.split(":")
-        if len(tokens) < 3:
-            print(f"[Error] Bad source spec: '{part}'. Expected path:type:shards")
-            sys.exit(1)
-        path     = tokens[0]
-        src_type = tokens[1]
-        shards   = [int(x) for x in tokens[2].split(",") if x.strip()]
-        sources.append({"type": src_type, "path": path,
-                        "train_shards": shards, "val_shards": shards})
-    return sources
+        ci = unique_clusters.index(lbl)
+        if r["gt_class_id"] in unique_classes:
+            gi = unique_classes.index(r["gt_class_id"])
+            comp[ci, gi] += 1
 
+    fig, ax = plt.subplots(figsize=(max(8, len(unique_clusters)*0.9 + 2), 5))
+    fig.patch.set_facecolor("#0F0F0F")
+    ax.set_facecolor("#1A1A2E")
+
+    bottom = np.zeros(len(unique_clusters))
+    x = np.arange(len(unique_clusters))
+    for gi, cls_id in enumerate(unique_classes):
+        vals = comp[:, gi]
+        bars = ax.bar(x, vals, bottom=bottom,
+                      color=PALETTE[gi % len(PALETTE)],
+                      label=CLASS_NAMES.get(cls_id, f"Class {cls_id}"),
+                      width=0.7, alpha=0.9)
+        bottom += vals
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"Cluster {c}" for c in unique_clusters],
+                       color="white", fontsize=9)
+    ax.set_ylabel("Pulse Count", color="#AAAAAA")
+    ax.set_xlabel("HDBSCAN Discovered Cluster", color="#AAAAAA")
+    ax.set_title("Cluster Composition by Ground-Truth PD Type",
+                 color="white", fontsize=12, fontweight="bold", pad=10)
+    ax.tick_params(axis="y", colors="#888888")
+    ax.spines["bottom"].set_color("#333333")
+    ax.spines["left"].set_color("#333333")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    leg = ax.legend(fontsize=8, framealpha=0.3, labelcolor="white",
+                    facecolor="#0F0F0F", loc="upper right")
+    plt.tight_layout()
+
+    out_path = os.path.join(out_dir, "fig2_cluster_composition.png")
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"[Plot] Saved -> {out_path}")
+    return out_path
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Exp04 DEC: Feature Extraction + HDBSCAN Clustering")
-    parser.add_argument("--checkpoint_id",  required=True, help="NodeID of the trained DEC model")
-    parser.add_argument("--input_sources",  required=True,
-                        help="Semicolon-separated: path:type:shards. E.g. data/raw/measured/FOLDER:measured:1,2,3")
-    parser.add_argument("--time_threshold", type=float, default=100e-9,
-                        help="Max time delta (s) for PD instance grouping (default: 100ns)")
-    parser.add_argument("--dist_threshold", type=float, default=0.5,
-                        help="Max L2 embedding distance for PD instance grouping (default: 0.5)")
-    parser.add_argument("--min_cluster_size", type=int, default=5,
-                        help="HDBSCAN min_cluster_size (default: 5)")
-    parser.add_argument("--smoke_test", action="store_true",
-                        help="Run on first shard of first source only")
+    parser = argparse.ArgumentParser(
+        description="exp04 DEC: Inference, HDBSCAN Clustering, Visualization"
+    )
+    parser.add_argument("--checkpoint_id", required=True,
+                        help="NodeID of the trained checkpoint (e.g. vWIh)")
+    parser.add_argument("--source", action="append", dest="sources", default=[],
+                        metavar="path:type:shards",
+                        help="Dataset source. Repeatable. Format: path:type:shard1,shard2,...")
+    parser.add_argument("--time_threshold", type=float, default=100e-9)
+    parser.add_argument("--dist_threshold",  type=float, default=0.5)
+    parser.add_argument("--min_cluster_size", type=int,  default=5)
+    parser.add_argument("--smoke_test", action="store_true")
     args = parser.parse_args()
 
+    if not args.sources:
+        print("[Error] Provide at least one --source path:type:shards")
+        sys.exit(1)
+
     # 1. Config + model
-    config = load_config_for_checkpoint(args.checkpoint_id)
-    train_cfg = config["training"]
-    device = select_device(train_cfg.get("device", "auto"))
-    print(f"[Device] Using: {device}")
+    config   = load_config(args.checkpoint_id)
+    device   = select_device(config["training"].get("device", "auto"))
+    print(f"[Device] {device}")
 
     task = DECTask(config)
     load_weights(args.checkpoint_id, task)
     task = task.to(device)
-    task.eval()
 
-    # 2. Build dataset from CLI-specified sources
-    sources = parse_input_sources(args.input_sources)
+    # 2. Dataset
+    sources = parse_sources(args.sources)
     if args.smoke_test:
         for s in sources:
             s["train_shards"] = [s["train_shards"][0]]
             s["val_shards"]   = [s["val_shards"][0]]
-        print("[Smoke Test] Using first shard of each source.")
 
-    dataset = DECDataset(
-        sources       = sources,
-        shard_key     = "train_shards",   # Uses the shards specified in --input_sources
-        max_pulse_len = config["data"]["max_pulse_len"],
-        augment       = False,
+    data_cfg = config["data"]
+    wavelet_kwargs = dict(
+        denoise        = data_cfg.get("denoise",        True),
+        wavelet        = data_cfg.get("wavelet",        "db4"),
+        wavelet_level  = data_cfg.get("wavelet_level",  4),
+        threshold_mode = data_cfg.get("threshold_mode", "soft"),
     )
-    loader = DataLoader(dataset, batch_size=train_cfg.get("batch_size", 128),
-                        shuffle=False, num_workers=0)
-
+    dataset = DECDataset(sources=sources, shard_key="train_shards",
+                         max_pulse_len=data_cfg["max_pulse_len"],
+                         augment=False, **wavelet_kwargs)
+    loader  = DataLoader(dataset, batch_size=config["training"].get("batch_size", 128),
+                         shuffle=False, num_workers=0)
     if not dataset.index:
-        print("[Warning] No pulses found. Check --input_sources paths and shard IDs.")
+        print("[Warning] No pulses found. Check your --source arguments.")
         sys.exit(0)
 
     # 3. Extract embeddings
-    print("[Inference] Extracting features for all pulses...")
-    features = extract_features(task, loader, dataset, device)
-
-    # 4. HDBSCAN clustering (no predefined K)
+    features   = extract_features(task, loader, dataset, device)
     hdb_labels = run_hdbscan(features, min_cluster_size=args.min_cluster_size)
+    cluster_map = align_clusters(features, hdb_labels)
+    print(f"[Alignment] Cluster->Class map: {cluster_map}")
 
-    # 5. Post-hoc label alignment (labels only used for naming, not training)
-    cluster_map = align_clusters_to_classes(features, hdb_labels)
-    print(f"[Alignment] Cluster -> Class mapping: {cluster_map}")
+    # 4. PD instance grouping
+    results = group_pd_instances(features, hdb_labels,
+                                 args.time_threshold, args.dist_threshold)
 
-    # 6. PD instance grouping
-    results = group_into_pd_instances(features, hdb_labels,
-                                      args.time_threshold, args.dist_threshold)
-
-    # 7. Compute metrics
+    # 5. Metrics
     metrics = compute_metrics(results, hdb_labels, cluster_map)
-    print(f"[Metrics] CLS Accuracy: {metrics['classification_accuracy']:.4f} | "
-          f"Grouping F1: {metrics['grouping_f1']:.4f} | "
-          f"Clusters Found: {metrics['n_clusters_found']}")
+    metrics.update({
+        "checkpoint_id":   args.checkpoint_id,
+        "time_threshold":  args.time_threshold,
+        "dist_threshold":  args.dist_threshold,
+        "min_cluster_size": args.min_cluster_size,
+        "sources":         args.sources,
+    })
+    print(f"\n[Results]  CLS Accuracy : {metrics['classification_accuracy']:.4f}")
+    print(f"[Results]  Silhouette   : {metrics['silhouette_score']:.4f}")
+    print(f"[Results]  Grouping F1  : {metrics['grouping_f1']:.4f}")
+    print(f"[Results]  Clusters     : {metrics['n_clusters_found']}")
+    print(f"[Results]  Noise Points : {metrics['n_noise_points']}")
 
-    # 8. Save output
-    run_ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
-    inf_node_id  = "".join(random.choices(string.ascii_letters + string.digits, k=4))
-    origin       = getattr(dataset, "origin", "ms")
-    root_id      = getattr(dataset, "root_id", "UNKN")
-    method       = config["experiment"].get("name", "exp04_dec")
-    folder_name  = f"{run_ts}_{origin}-{root_id}-{inf_node_id}"
+    # 6. Output directory
+    run_ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
+    inf_id     = "".join(random.choices(string.ascii_letters + string.digits, k=4))
+    out_cfg    = config.get("output", {})
+    results_base = os.path.abspath(out_cfg.get("results_dir", "data/classification_output/exp04_dec"))
+    method     = config["experiment"].get("name", "exp04_dec")
+    out_dir    = os.path.join(results_base, method, f"{run_ts}_inf-{args.checkpoint_id}-{inf_id}")
+    os.makedirs(out_dir, exist_ok=True)
 
-    out_dir = os.path.abspath(os.path.join(config["output"]["results_dir"], method, folder_name))
-    save_results(results, hdb_labels, cluster_map, out_dir, inf_node_id)
-
-    metrics["time_threshold"]  = args.time_threshold
-    metrics["dist_threshold"]  = args.dist_threshold
-    metrics["min_cluster_size"] = args.min_cluster_size
+    # 7. Save metrics + history
     with open(os.path.join(out_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=4)
 
-    history_line = (
-        f"DEC Inference on [{args.input_sources}] with model {args.checkpoint_id} "
-        f"at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. "
-        f"Clusters found: {metrics['n_clusters_found']}, "
-        f"ClsAcc: {metrics['classification_accuracy']:.4f}, "
-        f"GroupF1: {metrics['grouping_f1']:.4f}."
+    history = (
+        f"DEC Inference | Checkpoint: {args.checkpoint_id} | "
+        f"Sources: {args.sources} | "
+        f"Clusters found: {metrics['n_clusters_found']} | "
+        f"CLS Acc: {metrics['classification_accuracy']:.4f} | "
+        f"Silhouette: {metrics['silhouette_score']:.4f} | "
+        f"GroupF1: {metrics['grouping_f1']:.4f} | "
+        f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     with open(os.path.join(out_dir, "analysis_history.txt"), "w") as f:
-        f.write(history_line + "\n")
+        f.write(history + "\n")
 
-    print("\n[Lineage] Registering prediction run...")
-    register_process(
-        parent_id        = args.checkpoint_id,
-        stage            = "prediction",
-        method           = "dec_hdbscan",
-        folder_path      = out_dir,
-        appended_history = history_line,
-        force_node_id    = inf_node_id,
-    )
-    print(f"[Lineage] Registered as Node {inf_node_id} (child of {args.checkpoint_id})")
-    print(f"\n[Done] Results -> {out_dir}")
+    # 8. Plots
+    plot_embeddings(results, hdb_labels, cluster_map, out_dir)
+    plot_cluster_composition(results, hdb_labels, cluster_map, out_dir)
+
+    # 9. Lineage
+    print("\n[Lineage] Registering...")
+    register_process(parent_id=args.checkpoint_id, stage="prediction",
+                     method="dec_hdbscan", folder_path=out_dir,
+                     appended_history=history, force_node_id=inf_id)
+    print(f"[Lineage] Node {inf_id} (child of {args.checkpoint_id})")
+    print(f"\n[Done] Results saved -> {out_dir}")
+    return metrics, out_dir
 
 
 if __name__ == "__main__":

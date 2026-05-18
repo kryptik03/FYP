@@ -1,0 +1,21 @@
+{
+    "classification_accuracy": 0.9540918163672655,
+    "silhouette_score": 0.8389325141906738,
+    "grouping_precision": 0.9496183206106871,
+    "grouping_recall": 0.3291005291005291,
+    "grouping_f1": 0.48880157170923383,
+    "n_pulses": 2520,
+    "n_clusters_found": 10,
+    "n_noise_points": 15,
+    "n_gt_instances": 630,
+    "n_pred_instances": 1620,
+    "checkpoint_id": "vWIh",
+    "time_threshold": 1e-07,
+    "dist_threshold": 0.5,
+    "min_cluster_size": 5,
+    "sources": [
+        "data/raw/synthesised/20260427_170034_sy-ShmH-ShmH:synthesised:17,18,19,20",
+        "data/raw/synthesised/20260514_003009_sy-tyly-tyly:synthesised:17,18,19,20",
+        "data/raw/measured/20260517_004832_ms-K7FX-K7FX:measured:17,18,19,20"
+    ]
+}

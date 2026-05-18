@@ -67,7 +67,7 @@ NOISE_DB_PATH     = PROJECT_ROOT / "data" / "noise" / "real_noise_db.h5"
 
 N_SCENE_POINTS = 50_000   # 10 µs at 5 GS/s (dt = 0.2 ns)
 NUM_SENSORS    = 4
-NICKNAME       = "Selective Measured Shard Generation - PD3_Delam_Batch2_10kv"
+NICKNAME       = "Selective Measured Shard Generation"
 
 logging.basicConfig(
     level=logging.INFO,

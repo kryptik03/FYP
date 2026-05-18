@@ -19,12 +19,23 @@ def generate_short_id(length=4):
     characters = string.ascii_letters + string.digits
     return ''.join(random.choice(characters) for _ in range(length))
 
-def ingest_cwru_directory(input_dir, output_dir, chunk_size=2048, group_by_fault_base=True):
+def ingest_cwru_directory(
+    input_dir, 
+    output_dir, 
+    chunk_size=2048, 
+    group_by_fault_base=True, 
+    max_scenes_per_shard=None,
+    include_files=None,
+    exclude_files=None
+):
     """
     Crawls CWRU directory, parses fault strings, chunks into uniform scenes, 
     and exports to MLOps-compliant HDF5 shards.
     group_by_fault_base: If True, groups all faults with the same fault base (e.g., IR007_0 and IR007_3) into the same class.
     If False, groups by the full fault string (e.g., IR007_0 and IR007_3 into different classes).
+    max_scenes_per_shard: If set, limits the number of scenes generated per shard.
+    include_files: If set, a list of substrings. Only files matching any substring will be ingested.
+    exclude_files: If set, a list of substrings. Files matching any substring will be excluded.
     """
     os.makedirs(output_dir, exist_ok=True)
     
@@ -33,7 +44,15 @@ def ingest_cwru_directory(input_dir, output_dir, chunk_size=2048, group_by_fault
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     group_str = "GroupedByFault" if group_by_fault_base else "DistinctHP"
     nickname = f"CWRU_Baseline_{group_str}"
-    history_log = f"Measured dataset [{nickname}] ingested from CWRU .mat files at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. HP Grouping: {group_by_fault_base}"
+    
+    inc_str = ",".join(include_files) if include_files is not None else "None"
+    exc_str = ",".join(exclude_files) if exclude_files is not None else "None"
+    max_scenes_str = str(max_scenes_per_shard) if max_scenes_per_shard is not None else "All"
+    history_log = (
+        f"Measured dataset [{nickname}] ingested from CWRU .mat files at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. "
+        f"HP Grouping: {group_by_fault_base}, Max Scenes/Shard: {max_scenes_str}, "
+        f"Include Filters: {inc_str}, Exclude Filters: {exc_str}"
+    )
     
     folder_name = f"{timestamp}_cw-{root_id}-{root_id}"
     target_output_dir = os.path.join(output_dir, folder_name)
@@ -57,6 +76,15 @@ def ingest_cwru_directory(input_dir, output_dir, chunk_size=2048, group_by_fault
         for filename in sorted(mat_files):
             filepath = os.path.join(root, filename)
             parent_folder = os.path.basename(root) # e.g., '12k_Drive_End'
+            
+            # --- Include/Exclude Filter Check ---
+            rel_path = f"{parent_folder}/{filename}"
+            if include_files is not None:
+                if not any(inc in filename or inc in rel_path for inc in include_files):
+                    continue
+            if exclude_files is not None:
+                if any(exc in filename or exc in rel_path for exc in exclude_files):
+                    continue
             
             # --- Dynamic Class Parsing ---
             # Matches strings like "IR007_0.mat" or "OR014@6_3.mat"
@@ -111,6 +139,9 @@ def ingest_cwru_directory(input_dir, output_dir, chunk_size=2048, group_by_fault
             min_length = min([len(arr) for arr in arrays])
             num_chunks = min_length // chunk_size
             
+            if max_scenes_per_shard is not None:
+                num_chunks = min(num_chunks, max_scenes_per_shard)
+                
             if num_chunks == 0:
                 print(f"  [-] Skipped: Not enough data points.")
                 continue
@@ -157,6 +188,11 @@ def ingest_cwru_directory(input_dir, output_dir, chunk_size=2048, group_by_fault
                 h5f.attrs['assigned_class_name'] = class_key
                 h5f.attrs['root_id'] = root_id
                 h5f.attrs['node_id'] = root_id
+                
+                # Filter and limits tracking
+                h5f.attrs['max_scenes_per_shard'] = max_scenes_per_shard if max_scenes_per_shard is not None else -1
+                h5f.attrs['include_files'] = ",".join(include_files) if include_files is not None else ""
+                h5f.attrs['exclude_files'] = ",".join(exclude_files) if exclude_files is not None else ""
 
                 # Root Attributes to add:
                 h5f.attrs['sampling_frequency_Hz'] = 12000.0 # Standard for CWRU drive end
@@ -211,9 +247,36 @@ if __name__ == "__main__":
     # False = 'IR007_0' and 'IR007_3' become different Class IDs.
     GROUP_BY_FAULT_LOCATION = True 
     
+    # Filter settings:
+    # Set to an integer to limit the number of scenes per file, or None to ingest all.
+    MAX_SCENES_PER_SHARD = 5
+    
+    # Set to a list of substrings to match filenames/paths you WANT to ingest (e.g. ["IR007", "Normal"]) or None.
+    INCLUDE_FILES = ["IR007", "IR014"]
+    
+    # Set to a list of substrings to match filenames/paths you want to EXCLUDE (e.g. ["OR014"]) or None.
+    EXCLUDE_FILES = None
+    
     ingest_cwru_directory(
         input_dir=INPUT_CWRU_DIR, 
         output_dir=OUTPUT_H5_DIR, 
         chunk_size=2048, 
-        group_by_fault_base=GROUP_BY_FAULT_LOCATION
+        group_by_fault_base=GROUP_BY_FAULT_LOCATION,
+        max_scenes_per_shard=MAX_SCENES_PER_SHARD,
+        include_files=INCLUDE_FILES,
+        exclude_files=EXCLUDE_FILES
     )
+
+
+    """
+    # Filter settings:
+    # Set to an integer to limit the number of scenes per file, or None to ingest all.
+    MAX_SCENES_PER_SHARD = 50  # <-- E.g., limit to 50 scenes per file
+    
+    # Set to a list of substrings to match filenames/paths you WANT to ingest or None.
+    INCLUDE_FILES = ["IR007", "Normal"]  # <-- E.g., only ingest IR007 faults and Normal bearings
+    
+    # Set to a list of substrings to match filenames/paths you want to EXCLUDE or None.
+    EXCLUDE_FILES = ["OR014"]  # <-- E.g., ignore all OR014 faults
+
+    """

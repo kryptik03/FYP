@@ -1,0 +1,1 @@
+DEC Inference | Checkpoint: vWIh | Sources: ['data/raw/synthesised/20260427_170034_sy-ShmH-ShmH:synthesised:17,18,19,20', 'data/raw/synthesised/20260514_003009_sy-tyly-tyly:synthesised:17,18,19,20', 'data/raw/measured/20260517_004832_ms-K7FX-K7FX:measured:17,18,19,20'] | Clusters found: 10 | CLS Acc: 0.9541 | Silhouette: 0.8389 | GroupF1: 0.4888 | Timestamp: 2026-05-17 10:35:27
