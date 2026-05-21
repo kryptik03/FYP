@@ -240,7 +240,7 @@ def ingest_cwru_directory(
 if __name__ == "__main__":
     # USER CONFIGURATION
     INPUT_CWRU_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'unprocessed_bearing'))
-    OUTPUT_H5_DIR  = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'raw', 'measured'))
+    OUTPUT_H5_DIR  = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'raw', 'cwru'))
     
     # TOGGLE THIS:
     # True = 'IR007_0' and 'IR007_3' become the same Class ID.
