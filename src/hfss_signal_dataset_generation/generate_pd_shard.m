@@ -187,8 +187,8 @@ function final_pulse_id = generate_pd_shard(shard_id, num_scenes_per_shard, outp
         mkdir(output_dir);
     end
     
-    % Dynamically format the filename (e.g., synth_shard_01.h5)
-    filename = sprintf('synth_shard_%02d.h5', shard_id);
+    % Dynamically format the filename (e.g., shard_01.h5)
+    filename = sprintf('shard_%02d.h5', shard_id);
     output_file = fullfile(output_dir, filename);
     if isfile(output_file); delete(output_file); end
     

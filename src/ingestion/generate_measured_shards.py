@@ -5,7 +5,7 @@ Generates PyTorch-compatible HDF5 shards by taking isolated waveforms from
 data/interim_measured/isolated_waveforms/ and injecting them into a 10us canvas.
 Preserves multi-channel TDOA and supports real or synthetic noise injection.
 
-Output: data/raw/measured/<timestamp>_ms-<node_id>-<node_id>/synth_shard_XX.h5
+Output: data/raw/measured/<timestamp>_ms-<node_id>-<node_id>/shard_XX.h5
 """
 
 import os
@@ -53,10 +53,18 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 def extract_class_id(pd_type_str: str) -> int:
-    """PD1=0, PD2=1, PD3=2, PD4=3, PD5=4"""
+    """PD2=3, PD3=4, PD4=5, PD5=6"""
     m = re.search(r"PD(\d+)", pd_type_str)
     if m:
-        return int(m.group(1)) - 1
+        num = int(m.group(1))
+        if num == 2:
+            return 3
+        elif num == 3:
+            return 4
+        elif num == 4:
+            return 5
+        elif num == 5:
+            return 6
     return 0
 
 
@@ -168,7 +176,7 @@ def generate_shards(
                         batch_scenes[scene_idx, ch_idx, :] += trace_ds[start:start+N_SCENE_POINTS]
             
         # Write to HDF5
-        out_file = output_dir / f"synth_shard_{shard_id:02d}.h5"
+        out_file = output_dir / f"shard_{shard_id:02d}.h5"
         if out_file.exists(): out_file.unlink()
             
         with h5py.File(out_file, "w") as h5f:
@@ -195,7 +203,7 @@ def generate_shards(
             if batch_labels:
                 h5f["labels"].attrs["column_1"] = "Scene_ID (0-indexed)"
                 h5f["labels"].attrs["column_2"] = "Channel_ID (0-indexed)"
-                h5f["labels"].attrs["column_3"] = "Class_ID (0=PD1, 1=PD2, 2=PD3, ...)"
+                h5f["labels"].attrs["column_3"] = "Class_ID (3=Incision, 4=Delamination, 5=FeOx, 6=FeOx_High)"
                 h5f["labels"].attrs["column_4"] = "Pulse_Instance_ID (0-indexed)"
                 h5f["labels"].attrs["column_5"] = "TOA_Index"
                 h5f["labels"].attrs["column_6"] = "Start_Idx"
@@ -242,6 +250,9 @@ def main():
         force_root_id=node_id,
         force_timestamp=run_ts
     )
+
+    with open(os.path.join(raw_output_dir, "analysis_history.txt"), "w") as f:
+        f.write(history_log + "\n")
 
 if __name__ == "__main__":
     main()

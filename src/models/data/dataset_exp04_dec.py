@@ -116,11 +116,8 @@ class DECDataset(Dataset):
             root_path  = os.path.abspath(source["path"])
             shard_ids  = source.get(shard_key, [])
 
-            # Accept both spellings: "synthesised" (British) and "synthesized" (American)
-            prefix = "synth_shard" if src_type in ("synthesized", "synthesised") else "measured_shard"
-
             for shard_id in shard_ids:
-                shard_path = os.path.join(root_path, f"{prefix}_{shard_id:02d}.h5")
+                shard_path = os.path.join(root_path, f"shard_{shard_id:02d}.h5")
                 if not os.path.exists(shard_path):
                     print(f"[DECDataset] Warning: Shard not found, skipping: {shard_path}")
                     continue

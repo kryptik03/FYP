@@ -7,10 +7,10 @@ Output format matches the FYP pipeline requirements (dynamic thresholding, TOA t
 and registers to the SQLite lineage DB.
 
 Classes:
-    - SEDO (Class ID: 5)
-    - DED  (Class ID: 6)
-    - DEDO (Class ID: 7)
-    - SMG  (Class ID: 8)
+    - SEDO (Class ID: 7)
+    - DED  (Class ID: 8)
+    - DEDO (Class ID: 9)
+    - SMG  (Class ID: 10)
 """
 
 import argparse
@@ -140,7 +140,7 @@ def generate_shards(
                 global_pulse_id += 1
                 
                 # Pick equation and coords
-                eq_type = random.randint(5, 8)  # 5=SEDO, 6=DED, 7=DEDO, 8=SMG
+                eq_type = random.randint(7, 10)  # 7=SEDO, 8=DED, 9=DEDO, 10=SMG
                 pd_idx = random.randint(0, len(COORDS_PD) - 1)
                 pd_loc = COORDS_PD[pd_idx]
                 
@@ -156,13 +156,13 @@ def generate_shards(
                 
                 # Generate clean base pulse starting slightly delayed to allow smooth 0
                 td_base = 200e-9
-                if eq_type == 5:
+                if eq_type == 7:
                     base_sig = simulate_SEDO(t_pulse, 1.0, 0.4e-6, 15e6, td=td_base)
-                elif eq_type == 6:
-                    base_sig = simulate_DED(t_pulse, 2.0, 2e6, 10e6, td=td_base)
-                elif eq_type == 7:
-                    base_sig = simulate_DEDO(t_pulse, 2.0, 1.5e6, 15e6, 15e6, td=td_base)
                 elif eq_type == 8:
+                    base_sig = simulate_DED(t_pulse, 2.0, 2e6, 10e6, td=td_base)
+                elif eq_type == 9:
+                    base_sig = simulate_DEDO(t_pulse, 2.0, 1.5e6, 15e6, 15e6, td=td_base)
+                elif eq_type == 10:
                     base_sig = simulate_SMG(t_pulse, 1.0, 1e-6, 0.2e-6, 20e6, td=td_base)
                 
                 # Randomize injection index
@@ -220,7 +220,7 @@ def generate_shards(
                 batch_scenes[scene_idx] += 0.05 * np.sin(2 * np.pi * 100e6 * t_arr)
 
         # Write shard
-        out_file = output_dir / f"synth_shard_{shard_id:02d}.h5"
+        out_file = output_dir / f"shard_{shard_id:02d}.h5"
         if out_file.exists():
             out_file.unlink()
 
@@ -233,7 +233,7 @@ def generate_shards(
                                    dtype=np.float64, compression="gzip", compression_opts=4)
                 h5f["labels"].attrs["column_1"] = "Scene_ID (0-indexed)"
                 h5f["labels"].attrs["column_2"] = "Channel_ID (0-indexed)"
-                h5f["labels"].attrs["column_3"] = "Class_ID (5=SEDO, 6=DED, 7=DEDO, 8=SMG)"
+                h5f["labels"].attrs["column_3"] = "Class_ID (7=SEDO, 8=DED, 9=DEDO, 10=SMG)"
                 h5f["labels"].attrs["column_4"] = "Pulse_Instance_ID (0-indexed)"
                 h5f["labels"].attrs["column_5"] = "TOA_Index"
                 h5f["labels"].attrs["column_6"] = "Start_Idx"

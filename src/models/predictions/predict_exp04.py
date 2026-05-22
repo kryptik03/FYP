@@ -47,11 +47,16 @@ from src.utils.lineage_tracker import register_process
 # Class name mapping (PD type index -> human-readable label)
 # ---------------------------------------------------------------------------
 CLASS_NAMES = {
-    0: "PD1 Void",
-    1: "PD2 Incision",
-    2: "PD3 Delamination",
-    3: "PD4 FeOx",
-    4: "PD5 FeOx High",
+    0: "PD1 Void Simulated",
+    1: "PD2 Incision Simulated",
+    3: "PD2 Incision Measured",
+    4: "PD3 Delamination Measured",
+    5: "PD4 FeOx Measured",
+    6: "PD5 FeOx High Measured",
+    7: "SEDO",
+    8: "DED",
+    9: "DEDO",
+    10: "SMG",
 }
 
 # ---------------------------------------------------------------------------

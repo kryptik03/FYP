@@ -23,19 +23,15 @@ experiment:
 data:
   sources:
     - type: "synthesised"
-      path: "data/raw/synthesised/20260427_170034_sy-ShmH-ShmH"
-      train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-      val_shards: [17, 18, 19, 20]
-    - type: "synthesised"
-      path: "data/raw/synthesised/20260514_003009_sy-tyly-tyly"
+      path: "data/raw/synthesised/20260523_002258_sy-9BhP-9BhP"
       train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
       val_shards: [17, 18, 19, 20]
     - type: "cwru"
-      path: "data/raw/cwru/20260518_164152_cw-zivk-zivk"
-      train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-      val_shards: [17, 18, 19, 20]
+      path: "data/raw/cwru/20260523_002621_cw-DuMq-DuMq"
+      train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      val_shards: [13, 14, 15, 16]
     - type: "eqn_generated"
-      path: "data/raw/eqn_generated/20260521_141941_sy-K2rh-K2rh"
+      path: "data/raw/eqn_generated/20260523_002655_sy-0s6o-0s6o"
       train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
       val_shards: [17, 18, 19, 20]
   max_pulse_len: 4096

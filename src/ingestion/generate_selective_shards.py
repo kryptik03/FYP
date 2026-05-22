@@ -82,9 +82,19 @@ log = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────
 
 def _default_class_id(filename: str) -> int:
-    """Infer class ID from filename: PD1=0, PD2=1, ..., PD5=4."""
+    """Infer class ID from filename: PD2=3, PD3=4, PD4=5, PD5=6."""
     m = re.search(r"PD(\d+)", filename, re.IGNORECASE)
-    return (int(m.group(1)) - 1) if m else 0
+    if m:
+        num = int(m.group(1))
+        if num == 2:
+            return 3
+        elif num == 3:
+            return 4
+        elif num == 4:
+            return 5
+        elif num == 5:
+            return 6
+    return 0
 
 
 def _scan_available_files() -> list[dict]:
@@ -248,7 +258,7 @@ def generate_shards(
                         batch_scenes[scene_idx, ch_idx, :] += trace_ds[s:s + N_SCENE_POINTS]
 
         # Write shard
-        out_file = output_dir / f"measured_shard_{shard_id:02d}.h5"
+        out_file = output_dir / f"shard_{shard_id:02d}.h5"
         if out_file.exists():
             out_file.unlink()
 
@@ -261,7 +271,7 @@ def generate_shards(
                                    dtype=np.float64, compression="gzip", compression_opts=4)
                 h5f["labels"].attrs["column_1"] = "Scene_ID (0-indexed)"
                 h5f["labels"].attrs["column_2"] = "Channel_ID (0-indexed)"
-                h5f["labels"].attrs["column_3"] = "Class_ID (0=PD1, 1=PD2, 2=PD3, ...)"
+                h5f["labels"].attrs["column_3"] = "Class_ID (3=Incision, 4=Delamination, 5=FeOx, 6=FeOx_High)"
                 h5f["labels"].attrs["column_4"] = "Pulse_Instance_ID (0-indexed)"
                 h5f["labels"].attrs["column_5"] = "TOA_Index"
                 h5f["labels"].attrs["column_6"] = "Start_Idx"
@@ -300,7 +310,7 @@ def main():
                         help="Filenames or glob patterns to include. E.g. 'PD3_*' 'PD4_FeOx_Batch1_23kv.h5'")
     parser.add_argument("--class_ids", nargs="+", type=int, default=None, metavar="ID",
                         help="Optional: override class ID for each --include pattern (same order). "
-                             "If omitted, class IDs are auto-inferred from filenames (PD1=0, PD2=1, ...).")
+                             "If omitted, class IDs are auto-inferred from filenames (PD2=3, PD3=4, ...).")
     parser.add_argument("--noise_type", choices=["none", "synthetic", "real"], default="real",
                         help="Noise type to inject (default: real).")
     parser.add_argument("--num_shards", type=int, default=20,
@@ -363,7 +373,7 @@ def main():
     source_names = ", ".join(s["path"].name for s in matched)
     history_log  = (
         f"Selective measured shard generation at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. "
-        f"Sources: [{source_names}]. "
+        f"Sources: [{source_names}]. Class IDs: {args.class_ids}."
         f"Shards: {args.num_shards}, Scenes/shard: {args.scenes_per_shard}, Noise: {args.noise_type}."
     )
 
@@ -375,6 +385,9 @@ def main():
         num_shards       = args.num_shards,
         scenes_per_shard = args.scenes_per_shard,
     )
+
+    with open(os.path.join(output_dir, "analysis_history.txt"), "w") as f:
+        f.write(history_log + "\n")
 
     print(f"\nRegistering to lineage database...")
     register_root_dataset(

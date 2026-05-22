@@ -7,6 +7,7 @@ import string
 import re
 from datetime import datetime
 import sys
+import argparse
 
 # Add the parent directory to the path so we can import the lineage tracker
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
@@ -68,6 +69,7 @@ def ingest_cwru_directory(
     # Tracking for the Summary Report
     missing_channel_files = []
     processed_files_count = 0
+    shard_id = 1
 
     # 2. Recursively find all .mat files
     for root, dirs, files in os.walk(input_dir):
@@ -171,8 +173,9 @@ def ingest_cwru_directory(
                     0, 0, chunk_size - 1
                 ])
 
-            h5_filename = f"cwru_{class_id:02d}_{parent_folder}_{os.path.splitext(filename)[0]}.h5"
+            h5_filename = f"shard_{shard_id:02d}.h5"
             h5_path = os.path.join(target_output_dir, h5_filename)
+            shard_id += 1
             
             with h5py.File(h5_path, 'w') as h5f:
                 h5f.create_dataset('scenes', data=batch_scenes)
@@ -257,12 +260,20 @@ if __name__ == "__main__":
     # Set to a list of substrings to match filenames/paths you want to EXCLUDE (e.g. ["OR014"]) or None.
     EXCLUDE_FILES = None
     
+    parser = argparse.ArgumentParser(description="Ingest CWRU dataset.")
+    parser.add_argument("--group_by_fault_location", type=str, choices=['True', 'False'], default=str(GROUP_BY_FAULT_LOCATION), help="Group by fault location")
+    parser.add_argument("--max_scenes_per_shard", type=int, default=MAX_SCENES_PER_SHARD, help="Max scenes per shard (-1 for no limit)")
+    args = parser.parse_args()
+    
+    group_by_fault_location = args.group_by_fault_location == 'True'
+    max_scenes_per_shard = args.max_scenes_per_shard if args.max_scenes_per_shard > 0 else None
+    
     ingest_cwru_directory(
         input_dir=INPUT_CWRU_DIR, 
         output_dir=OUTPUT_H5_DIR, 
         chunk_size=2048, 
-        group_by_fault_base=GROUP_BY_FAULT_LOCATION,
-        max_scenes_per_shard=MAX_SCENES_PER_SHARD,
+        group_by_fault_base=group_by_fault_location,
+        max_scenes_per_shard=max_scenes_per_shard,
         include_files=INCLUDE_FILES,
         exclude_files=EXCLUDE_FILES
     )
