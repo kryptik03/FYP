@@ -13,7 +13,7 @@
 
 experiment:
   name: "exp04_dec"
-  description: "SimCLR Pre-Training + Deep Embedded Clustering for PD Signal Grouping."
+  description: "SimCLR Pre-Training + Deep Embedded Clustering for PD Signal Grouping. CWRU, synthesised & eqn based training datasets."
   parent_node_id: "ShmH"   # Set to the root_id of your primary dataset before training
   task_type: "dec"
 
@@ -30,8 +30,12 @@ data:
       path: "data/raw/synthesised/20260514_003009_sy-tyly-tyly"
       train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
       val_shards: [17, 18, 19, 20]
-    - type: "measured"
-      path: "data/raw/measured/20260517_004832_ms-K7FX-K7FX"
+    - type: "cwru"
+      path: "data/raw/cwru/20260518_164152_cw-zivk-zivk"
+      train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+      val_shards: [17, 18, 19, 20]
+    - type: "eqn_generated"
+      path: "data/raw/eqn_generated/20260521_141941_sy-K2rh-K2rh"
       train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
       val_shards: [17, 18, 19, 20]
   max_pulse_len: 4096

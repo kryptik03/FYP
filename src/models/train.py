@@ -545,12 +545,7 @@ def main():
     # ----------------------------------------------------------------------- #
     # 10. Register this run to the SQLite lineage database                     #
     # ----------------------------------------------------------------------- #
-    history_line = (
-        f"Task {task_type} at "
-        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, NodeID: {node_id}, "
-        f"BestEpoch: {best_epoch}, BestValLoss: {best_val_loss:.6f}, "
-        f"TrainingTime: {total_elapsed:.1f}s"
-    )
+    history_line = exp_cfg.get("description", "No description provided")
     print("\n[Lineage] Registering to SQLite DAG...")
     new_node_id = register_process(
         parent_id        = parent_id,
