@@ -7,7 +7,7 @@ rng('shuffle'); % Seeds the random number generator based on the current time
 
 %% 1. Master Configuration & Lineage Setup
 num_shards = 20;
-scenes_per_shard = 20;
+scenes_per_shard = 50;
 nickname = 'First try at an actual dataset'; % User-defined nickname
 
 fprintf('Initializing Master Data Generation...\n');
