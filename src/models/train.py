@@ -146,6 +146,32 @@ def _build_datasets_and_task(config: dict, task_type: str):
         )
         task = DECTask(config)
 
+    elif task_type == "dec_spherical":
+        from src.models.data.dataset_exp05_dec import DECDataset
+        from src.models.tasks.task_exp05_dec   import DECTask
+        sources = data_cfg["sources"]
+        wavelet_kwargs = dict(
+            denoise        = data_cfg.get("denoise",        True),
+            wavelet        = data_cfg.get("wavelet",        "db4"),
+            wavelet_level  = data_cfg.get("wavelet_level",  4),
+            threshold_mode = data_cfg.get("threshold_mode", "soft"),
+        )
+        train_ds = DECDataset(
+            sources       = sources,
+            shard_key     = "train_shards",
+            max_pulse_len = data_cfg["max_pulse_len"],
+            augment       = True,
+            **wavelet_kwargs,
+        )
+        val_ds = DECDataset(
+            sources       = sources,
+            shard_key     = "val_shards",
+            max_pulse_len = data_cfg["max_pulse_len"],
+            augment       = True,
+            **wavelet_kwargs,
+        )
+        task = DECTask(config)
+
     else:
         raise ValueError(f"[Error] Unknown task_type in config: '{task_type}'. "
                          f"Choose from: detection, classification, contrastive, dec")
@@ -222,7 +248,7 @@ def main():
     # 3. Smoke-test overrides                                                   #
     # ----------------------------------------------------------------------- #
     if args.smoke_test:
-        if task_type == "dec":
+        if task_type in ["dec", "dec_spherical"]:
             # Override shards inside each source
             for src in data_cfg["sources"]:
                 src["train_shards"] = [src["train_shards"][0]]
@@ -309,8 +335,11 @@ def main():
     # ----------------------------------------------------------------------- #
     # Special two-phase DEC training path                                       #
     # ----------------------------------------------------------------------- #
-    if task_type == "dec":
-        from src.models.data.dataset_exp04_dec import DECDataset
+    if task_type in ["dec", "dec_spherical"]:
+        if task_type == "dec":
+            from src.models.data.dataset_exp04_dec import DECDataset
+        else:
+            from src.models.data.dataset_exp05_dec import DECDataset
         import numpy as np
 
         phase1_epochs = train_cfg.get("phase1_epochs", 20)
@@ -434,19 +463,33 @@ def main():
                   f"Train KL: {train_losses['kl_div']:.4f} | "
                   f"Val KL: {val_metrics['kl_div']:.4f} | {elapsed:.1f}s")
 
-            # DEC Phase 2: KL loss ALWAYS increases by design (see task_exp04_dec.py).
-            # "Best checkpoint" logic based on lowest val KL is meaningless here —
-            # it would always save epoch 1. Instead, save every epoch and keep the last,
-            # which has the most refined, highest-confidence cluster assignments.
-            best_epoch = phase1_epochs + epoch
-            task.save_checkpoint(best_epoch, node_id,
-                os.path.abspath(out_cfg["weights_dir"]),
-                os.path.abspath(out_cfg["config_snapshot_dir"]),
-                config_path)
-            if epoch == phase2_epochs:
-                print(f"    ^ Final Phase2 checkpoint saved (epoch {best_epoch}).")
+            # DEC Phase 2 Saving Logic
+            if task_type == "dec":
+                # Original DEC Phase 2: KL loss ALWAYS increases by design (see task_exp04_dec.py).
+                # "Best checkpoint" logic based on lowest val KL is meaningless here —
+                # it would always save epoch 1. Instead, save every epoch and keep the last.
+                best_epoch = phase1_epochs + epoch
+                task.save_checkpoint(best_epoch, node_id,
+                    os.path.abspath(out_cfg["weights_dir"]),
+                    os.path.abspath(out_cfg["config_snapshot_dir"]),
+                    config_path)
+                if epoch == phase2_epochs:
+                    print(f"    ^ Final Phase2 checkpoint saved (epoch {best_epoch}).")
+            else:
+                # Spherical DEC Phase 2: KL loss should correctly decrease.
+                if val_metrics["kl_div"] < best_val_loss_p2:
+                    best_val_loss_p2 = val_metrics["kl_div"]
+                    best_epoch = phase1_epochs + epoch
+                    task.save_checkpoint(best_epoch, node_id,
+                        os.path.abspath(out_cfg["weights_dir"]),
+                        os.path.abspath(out_cfg["config_snapshot_dir"]),
+                        config_path)
+                    print(f"    ^ New best Phase2 val KL: {best_val_loss_p2:.4f}")
 
-        best_val_loss = val_metrics["total"]   # Report the final epoch's val KL
+        if task_type == "dec_spherical":
+            best_val_loss = best_val_loss_p2
+        else:
+            best_val_loss = val_metrics["total"]   # Report the final epoch's val KL
 
     # ----------------------------------------------------------------------- #
     # Standard single-phase training (detection / classification / contrastive)#

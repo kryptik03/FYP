@@ -52,7 +52,7 @@ if _PROJECT_ROOT not in sys.path:
 
 from src.models.data.dataset_exp02 import ClassificationDataset
 from src.models.tasks.task_exp02   import ClassificationTask
-from src.utils.lineage_tracker     import register_process
+from src.utils.lineage_tracker     import register_process, get_node_history
 
 
 # ---------------------------------------------------------------------------
@@ -367,9 +367,7 @@ def main():
         f"Shards: {shards}, "
         f"N_samples: {len(results)}, Accuracy: {metrics.get('accuracy', 0.0):.4f}"
     )
-    with open(os.path.join(output_dir, "analysis_history.txt"), "w") as f:
-        f.write(history_line + "\n")
-
+    
     # ----------------------------------------------------------------------- #
     # 6. Lineage registration                                                   #
     # ----------------------------------------------------------------------- #
@@ -382,6 +380,11 @@ def main():
         appended_history = history_line,
         force_node_id    = inf_node_id,
     )
+
+    with open(os.path.join(output_dir, "analysis_history.txt"), "w") as f:
+        full_history = get_node_history(inf_node_id)
+        f.write(full_history)
+    
     print(f"[Lineage] Node {new_node} registered (child of {checkpoint_id})")
 
 

@@ -106,6 +106,19 @@ def trace_lineage(node_id):
     else:
         print(f"[Error] Node {node_id} not found.")
 
+def get_node_history(node_id: str) -> str:
+    """Returns the full history log of a node as a string."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT history_log FROM nodes WHERE node_id=?", (node_id,))
+    result = cursor.fetchone()
+    conn.close()
+    
+    if result:
+        return result[0]
+    else:
+        raise ValueError(f"Node {node_id} does not exist in the database.")
+
 
 def describe_node(node_id):
     """Displays a highly detailed hierarchical database metadata report for the selected node and all its descendants (leaves)."""

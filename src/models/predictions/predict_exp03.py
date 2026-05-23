@@ -33,7 +33,7 @@ import networkx as nx
 
 from src.models.data.dataset_exp02 import ClassificationDataset
 from src.models.tasks.task_exp03_contrastive import ContrastiveTask
-from src.utils.lineage_tracker import register_process
+from src.utils.lineage_tracker import register_process, get_node_history
 
 
 def load_config(config_path: str) -> dict:
@@ -337,8 +337,6 @@ def main():
         f"Shards: {shard_ids}, ClsAcc: {acc:.4f}, GroupF1: {group_f1:.4f}."
     )
     
-    with open(os.path.join(out_dir, "analysis_history.txt"), "w") as f:
-        f.write(history_line + "\n")
     
     register_process(
         parent_id        = args.checkpoint_id,
@@ -348,6 +346,11 @@ def main():
         appended_history = history_line,
         force_node_id    = inf_node_id
     )
+
+    with open(os.path.join(out_dir, "analysis_history.txt"), "w") as f:
+        full_history = get_node_history(inf_node_id)
+        f.write(full_history)
+
     print(f"[Lineage] Registered prediction as Node {inf_node_id}")
 
 if __name__ == "__main__":

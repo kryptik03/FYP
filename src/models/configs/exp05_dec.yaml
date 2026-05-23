@@ -1,21 +1,26 @@
 # =============================================================================
-# Experiment Configuration: exp04_dec
-# Model  : 1D CNN Backbone + Deep Embedded Clustering (DEC)
+# Experiment Configuration: exp05_dec
+# Model  : 1D CNN Backbone + Spherical Deep Embedded Clustering (DEC)
 # Task   : Phase 1 = SimCLR Self-Supervised Pre-Training
-#          Phase 2 = DEC Unsupervised Cluster Refinement (labels used post-hoc)
+#          Phase 2 = Spherical DEC Unsupervised Cluster Refinement
 #
 # Key Design Principle:
 #   - Model NEVER sees class labels during any forward pass.
 #   - Labels (class_id) exist in the dataset and are used ONLY after training
 #     to map discovered cluster IDs -> real class names.
 #   - At inference: HDBSCAN finds K automatically with no predefined K.
+# 
+# Key Difference From exp04:
+#   - Cluster centroids are now also L2-normalized
+#   - soft_assign() now also L2-normalizes the centroids before distance computation
+#   - train.py now saves best weight as the lowest loss value for Phase 2
 # =============================================================================
 
 experiment:
-  name: "exp04_dec"
-  description: "SimCLR Pre-Training + Deep Embedded Clustering for PD Signal Grouping."
+  name: "exp05_dec"
+  description: "SimCLR Pre-Training + Spherical DEC for PD Signal Grouping."
   parent_node_id: "ShmH"   # Set to the root_id of your primary dataset before training
-  task_type: "dec"
+  task_type: "dec_spherical"
 
 # Multi-source dataset: list of input sources.
 # Each source specifies its type, path, and shard lists.
@@ -73,5 +78,5 @@ training:
 output:
   weights_dir: "models/weights"
   config_snapshot_dir: "models/configuration_snapshots"
-  results_dir: "data/classification_output/exp04_dec"
-  eval_dir: "data/performance_evaluation/classification/exp04_dec"
+  results_dir: "data/classification_output/exp05_dec"
+  eval_dir: "data/performance_evaluation/classification/exp05_dec"

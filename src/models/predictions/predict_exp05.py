@@ -1,10 +1,10 @@
 """
-predict_exp04.py
+predict_exp05.py
 ================
-Inference + Visualization script for exp04 Deep Embedded Clustering (DEC).
+Inference + Visualization script for exp05 Deep Embedded Clustering (DEC).
 
 Usage:
-    python src/models/predictions/predict_exp04.py \
+    python src/models/predictions/predict_exp05.py \
         --checkpoint_id vWIh \
         --source "data/raw/synthesised/20260427_170034_sy-ShmH-ShmH:synthesised:17,18,19,20" \
         --source "data/raw/measured/20260517_004832_ms-K7FX-K7FX:measured:17,18,19,20" \
@@ -39,8 +39,8 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", "..", ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.models.tasks.task_exp04_dec import DECTask
-from src.models.data.dataset_exp04_dec import DECDataset
+from src.models.tasks.task_exp05_dec import DECTask
+from src.models.data.dataset_exp05_dec import DECDataset
 from src.utils.lineage_tracker import register_process, get_node_history
 
 # ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ def plot_embeddings(results, hdb_labels, cluster_map, out_dir: str):
                         labelcolor="white", facecolor="#0F0F0F",
                         loc="best", markerscale=2)
 
-    plt.suptitle("exp04 DEC — Embedding Space Visualisation (t-SNE)",
+    plt.suptitle("exp05 DEC — Embedding Space Visualisation (t-SNE)",
                  color="white", fontsize=14, fontweight="bold", y=1.01)
     plt.tight_layout()
 
@@ -375,7 +375,7 @@ def plot_cluster_composition(results, hdb_labels, cluster_map, out_dir: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="exp04 DEC: Inference, HDBSCAN Clustering, Visualization"
+        description="exp05 DEC: Inference, HDBSCAN Clustering, Visualization"
     )
     parser.add_argument("--checkpoint_id", required=True,
                         help="NodeID of the trained checkpoint (e.g. vWIh)")
@@ -453,8 +453,8 @@ def main():
     run_ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
     inf_id     = "".join(random.choices(string.ascii_letters + string.digits, k=4))
     out_cfg    = config.get("output", {})
-    results_base = os.path.abspath(out_cfg.get("results_dir", "data/classification_output/exp04_dec"))
-    method     = config["experiment"].get("name", "exp04_dec")
+    results_base = os.path.abspath(out_cfg.get("results_dir", "data/classification_output/exp05_dec"))
+    method     = config["experiment"].get("name", "exp05_dec")
     out_dir    = os.path.join(results_base, method, f"{run_ts}_inf-{args.checkpoint_id}-{inf_id}")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -472,8 +472,6 @@ def main():
         f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     
-   
-
     # 8. Plots
     plot_embeddings(results, hdb_labels, cluster_map, out_dir)
     plot_cluster_composition(results, hdb_labels, cluster_map, out_dir)
@@ -483,13 +481,12 @@ def main():
     register_process(parent_id=args.checkpoint_id, stage="prediction",
                      method="dec_hdbscan", folder_path=out_dir,
                      appended_history=history, force_node_id=inf_id)
+    print(f"[Lineage] Node {inf_id} (child of {args.checkpoint_id})")
+    print(f"\n[Done] Results saved -> {out_dir}")
 
     with open(os.path.join(out_dir, "analysis_history.txt"), "w") as f:
         full_history = get_node_history(inf_id)
         f.write(full_history)
-
-    print(f"[Lineage] Node {inf_id} (child of {args.checkpoint_id})")
-    print(f"\n[Done] Results saved -> {out_dir}")
     return metrics, out_dir
 
 
