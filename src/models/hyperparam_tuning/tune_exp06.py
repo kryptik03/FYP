@@ -4,6 +4,7 @@ import yaml
 import copy
 import argparse
 import numpy as np
+from datetime import datetime
 import torch
 from torch.utils.data import DataLoader
 
@@ -176,3 +177,16 @@ if __name__ == "__main__":
     print("  Params: ")
     for key, value in trial.params.items():
         print(f"    {key}: {value}")
+        
+    # Save the best parameters to a JSON file
+    output_dir = os.path.abspath(config["output"].get("config_snapshot_dir", "models/configuration_snapshots"))
+    os.makedirs(output_dir, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    best_params_path = os.path.join(output_dir, f"best_tune_exp06_params_{timestamp}.json")
+    
+    import json
+    with open(best_params_path, "w") as f:
+        json.dump(trial.params, f, indent=4)
+        
+    print(f"\n[Saved] Best hyperparameters saved to: {best_params_path}")

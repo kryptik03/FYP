@@ -8,16 +8,24 @@
 
 experiment:
   name: "exp06_dec_tune"
-  description: "Optuna hyperparameter tuning for Semi-Supervised DEC on STFT features"
+  description: "Optuna hyperparameter tuning for Semi-Supervised DEC on STFT features. CWRU, Synthesised & Eqn datasets."
   parent_node_id: "PLACEHOLDER"   # Set to the node_id of your extracted STFT features
   task_type: "dec_semi"
 
 data:
   sources:
+    - type: "cwru"
+      path: "data/features/stft_magnitude/20260524_234212-cw-TuKT-vraW" # Set to extracted STFT dir
+      train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+      val_shards: [14, 15, 16]
+    - type: "equation"
+      path: "data/features/stft_magnitude/20260524_234301-sy-0s6o-UI2r" # Set to extracted STFT dir
+      train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+      val_shards: [17, 18, 19, 20]
     - type: "synthesised"
-      path: "data/features/stft_magnitude/PLACEHOLDER" # Set to extracted STFT dir
-      train_shards: [1, 2, 3, 4]
-      val_shards: [17, 18]
+      path: "data/features/stft_magnitude/20260524_234445-sy-1yGk-N5ZR" # Set to extracted STFT dir
+      train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+      val_shards: [17, 18, 19, 20]
   max_pulse_len: 4096
   label_fraction: 0.10   # 10% labels unmasked for Semi-Supervised pairwise constraints
   augment: true
