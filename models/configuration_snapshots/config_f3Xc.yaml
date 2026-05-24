@@ -1,0 +1,73 @@
+# =============================================================================
+# Experiment Configuration: exp04_dec
+# Model  : 1D CNN Backbone + Deep Embedded Clustering (DEC)
+# Task   : Phase 1 = SimCLR Self-Supervised Pre-Training
+#          Phase 2 = DEC Unsupervised Cluster Refinement (labels used post-hoc)
+#
+# Key Design Principle:
+#   - Model NEVER sees class labels during any forward pass.
+#   - Labels (class_id) exist in the dataset and are used ONLY after training
+#     to map discovered cluster IDs -> real class names.
+#   - At inference: HDBSCAN finds K automatically with no predefined K.
+# =============================================================================
+
+experiment:
+  name: "exp04_dec"
+  description: "SimCLR Pre-Training + Deep Embedded Clustering for PD Signal Grouping. Only Eqn and HFSS Datasets."
+  parent_node_id: "ShmH"   # Set to the root_id of your primary dataset before training
+  task_type: "dec"
+
+# Multi-source dataset: list of input sources.
+# Each source specifies its type, path, and shard lists.
+# Types: "synthesized" (synth_shard_XX.h5) or "measured" (measured_shard_XX.h5)
+data:
+  sources:
+    - type: "synthesised"
+      path: "data/raw/synthesised/20260523_005004_sy-1yGk-1yGk"
+      train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+      val_shards: [17, 18, 19, 20]
+    - type: "eqn_generated"
+      path: "data/raw/eqn_generated/20260523_002655_sy-0s6o-0s6o"
+      train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+      val_shards: [17, 18, 19, 20]
+  max_pulse_len: 4096
+
+  # Wavelet denoising applied to each pulse before it reaches the model.
+  # Set denoise: false to disable entirely.
+  denoise: true
+  wavelet: "db4"        # PyWavelets wavelet family (db4 is good for sharp transients)
+  wavelet_level: 3      # DWT decomposition depth (higher = removes lower frequencies too)
+  threshold_mode: "soft" # "soft" rounds coefficients to zero smoothly; "hard" cuts abruptly
+
+model:
+  in_channels: 1
+  base_channels: 32        # Larger than exp03 for richer features
+  embedding_dim: 128
+  # n_clusters: Initial K for DEC centroid init (via K-Means).
+  # This does NOT constrain inference (HDBSCAN finds K automatically).
+  # Set this to a number larger than your expected real class count.
+  n_clusters: 10
+
+task:
+  # Phase 1: SimCLR self-supervised contrastive pre-training
+  simclr_temperature: 0.5
+  
+  # Phase 2: DEC cluster refinement hyperparameters
+  dec_update_interval: 140   # Re-compute target distribution P every N batches
+  dec_tol: 0.001             # Early stop if cluster assignment change < tol
+
+training:
+  device: "auto"
+  batch_size: 128
+  phase1_epochs: 20          # SimCLR pre-training epochs
+  phase2_epochs: 15          # DEC refinement epochs
+  # Total epochs = phase1 + phase2; used in train.py for progress display
+  epochs: 35
+  learning_rate_phase1: 0.001
+  learning_rate_phase2: 0.0001
+
+output:
+  weights_dir: "models/weights"
+  config_snapshot_dir: "models/configuration_snapshots"
+  results_dir: "data/classification_output/exp04_dec"
+  eval_dir: "data/performance_evaluation/classification/exp04_dec"
