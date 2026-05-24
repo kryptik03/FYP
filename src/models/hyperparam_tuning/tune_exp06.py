@@ -59,25 +59,26 @@ def objective(trial, base_config: dict):
     search_space = cfg.get("tune", {}).get("search_space", {})
     
     # Override Learning Rates
+    # NOTE: Cast to float — YAML may parse scientific notation (e.g. 1e-5) as a string.
     if "learning_rate_phase1" in search_space:
         bounds = search_space["learning_rate_phase1"]
-        lr1 = trial.suggest_float("learning_rate_phase1", bounds[0], bounds[1], log=True)
+        lr1 = trial.suggest_float("learning_rate_phase1", float(bounds[0]), float(bounds[1]), log=True)
         cfg["training"]["learning_rate_phase1"] = lr1
         
     if "learning_rate_phase2" in search_space:
         bounds = search_space["learning_rate_phase2"]
-        lr2 = trial.suggest_float("learning_rate_phase2", bounds[0], bounds[1], log=True)
+        lr2 = trial.suggest_float("learning_rate_phase2", float(bounds[0]), float(bounds[1]), log=True)
         cfg["training"]["learning_rate_phase2"] = lr2
         
     # Override Pairwise Gamma
     if "pairwise_weight_gamma" in search_space:
         bounds = search_space["pairwise_weight_gamma"]
-        gamma = trial.suggest_float("pairwise_weight_gamma", bounds[0], bounds[1], log=True)
+        gamma = trial.suggest_float("pairwise_weight_gamma", float(bounds[0]), float(bounds[1]), log=True)
         cfg["task"]["pairwise_weight_gamma"] = gamma
         
     # Override Base Channels
     if "base_channels" in search_space:
-        options = search_space["base_channels"]
+        options = [int(x) for x in search_space["base_channels"]]  # ensure int
         bc = trial.suggest_categorical("base_channels", options)
         cfg["model"]["base_channels"] = bc
 
