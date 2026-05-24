@@ -14,8 +14,8 @@ except ImportError:
     print("[Error] Optuna is not installed. Run: pip install optuna")
     sys.exit(1)
 
-# Add parent directory to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+# Add project root directory to path (3 levels up from this script)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
 
 from src.models.data.dataset_exp06_dec import DECDataset_Exp06
 from src.models.tasks.task_exp06_dec import SemiSupervisedDECTask
