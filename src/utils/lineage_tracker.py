@@ -4,6 +4,8 @@ import shutil
 from datetime import datetime
 import string
 import random
+import tempfile
+import subprocess
 
 # lineage.db lives alongside this script in src/utils/ so that git tracks it.
 # Colab can push the updated DB back to GitHub after each training run.
@@ -118,6 +120,44 @@ def get_node_history(node_id: str) -> str:
         return result[0]
     else:
         raise ValueError(f"Node {node_id} does not exist in the database.")
+
+
+def update_node_history(node_id, new_history=None):
+    """Updates the history log of an existing node. If new_history is not provided, opens Notepad to edit."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Check if node exists and get current history
+    cursor.execute("SELECT history_log FROM nodes WHERE node_id=?", (node_id,))
+    result = cursor.fetchone()
+    if not result:
+        print(f"[Error] Node {node_id} does not exist.")
+        conn.close()
+        return
+        
+    current_history = result[0] or ""
+
+    if new_history is None:
+        # Create a temporary file to edit the history
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False) as tf:
+            tf.write(current_history)
+            temp_path = tf.name
+            
+        print(f"Opening notepad to edit history for node {node_id}...")
+        # Open notepad and wait for it to close
+        subprocess.run(['notepad.exe', temp_path])
+        
+        # Read the updated content
+        with open(temp_path, 'r') as tf:
+            new_history = tf.read().strip()
+            
+        # Clean up the temporary file
+        os.remove(temp_path)
+        
+    cursor.execute("UPDATE nodes SET history_log=? WHERE node_id=?", (new_history, node_id))
+    conn.commit()
+    conn.close()
+    print(f"[Tracker] Successfully updated history_log for Node {node_id}.")
 
 
 def describe_node(node_id):
@@ -346,8 +386,8 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="FYP Lineage Tracker CLI")
     
-    # NEW: Added 'all' and 'inspect' to the choices
-    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune', 'register_process', 'roots', 'all', 'inspect'], default='init')
+    # NEW: Added 'all', 'inspect', and 'update_history' to the choices
+    parser.add_argument('--action', choices=['init', 'register_root', 'visualize', 'prune', 'register_process', 'roots', 'all', 'inspect', 'update_history'], default='init')
     
     parser.add_argument('--origin', type=str)
     parser.add_argument('--method', type=str)
@@ -394,3 +434,8 @@ if __name__ == "__main__":
             print("Error: --node_id is required for inspection.")
         else:
             describe_node(args.node_id)
+    elif args.action == 'update_history':
+        if not args.node_id:
+            print("Error: --node_id is required for updating history.")
+        else:
+            update_node_history(args.node_id, args.history_log)

@@ -1,0 +1,19 @@
+{
+    "classification_accuracy": 0.6420225886018435,
+    "silhouette_score": 0.13351202011108398,
+    "grouping_precision": 0.9446391030133147,
+    "grouping_recall": 0.16930419492589802,
+    "grouping_f1": 0.28714453083395464,
+    "n_pulses": 15924,
+    "n_clusters_found": 3,
+    "n_noise_points": 518,
+    "n_gt_instances": 3981,
+    "n_pred_instances": 12313,
+    "checkpoint_id": "HmCX",
+    "time_threshold": 1e-07,
+    "dist_threshold": 0.5,
+    "min_cluster_size": 5,
+    "sources": [
+        "data/raw/measured/20260523_003445_ms-HvA1-HvA1:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"
+    ]
+}
