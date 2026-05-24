@@ -49,7 +49,8 @@ def register_root_dataset(origin, method, folder_path, nickname, history_log, fo
     root_id = force_root_id if force_root_id else generate_short_id()
     timestamp = force_timestamp if force_timestamp else datetime.now().strftime("%Y%m%d_%H%M%S")
     # Normalize to absolute path so pruning works regardless of CWD
-    folder_path = os.path.abspath(folder_path)
+    paths = [os.path.abspath(p.strip()) for p in folder_path.split(';')]
+    folder_path = ';'.join(paths)
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -68,7 +69,8 @@ def register_process(parent_id, stage, method, folder_path, appended_history, fo
     node_id = force_node_id if force_node_id else generate_short_id()
     timestamp = force_timestamp if force_timestamp else datetime.now().strftime("%Y%m%d_%H%M%S")
     # Normalize to absolute path so pruning works regardless of CWD
-    folder_path = os.path.abspath(folder_path)
+    paths = [os.path.abspath(p.strip()) for p in folder_path.split(';')]
+    folder_path = ';'.join(paths)
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -256,15 +258,17 @@ def prune_node(node_id):
     
     if confirm == 'YES':
         # Delete from Disk
-        if os.path.exists(folder_path):
-            if os.path.isdir(folder_path):
-                shutil.rmtree(folder_path)
-                print(f"-> Deleted folder: {folder_path}")
+        for p in folder_path.split(';'):
+            p = p.strip()
+            if os.path.exists(p):
+                if os.path.isdir(p):
+                    shutil.rmtree(p)
+                    print(f"-> Deleted folder: {p}")
+                else:
+                    os.remove(p)
+                    print(f"-> Deleted file: {p}")
             else:
-                os.remove(folder_path)
-                print(f"-> Deleted file: {folder_path}")
-        else:
-            print(f"-> Path not found on disk (already deleted?).")
+                print(f"-> Path not found on disk: {p}")
             
         # Delete from DB
         cursor.execute("DELETE FROM nodes WHERE node_id=?", (node_id,))

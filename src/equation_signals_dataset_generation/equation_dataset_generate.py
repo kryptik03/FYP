@@ -269,7 +269,7 @@ def main():
     # Lineage setup
     node_id     = "".join(random.choices(string.ascii_letters + string.digits, k=4))
     run_ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
-    folder_name = f"{run_ts}_sy-{node_id}-{node_id}"
+    folder_name = f"{run_ts}_eq-{node_id}-{node_id}"
     output_dir  = OUTPUT_ROOT / folder_name
 
     history_log = (

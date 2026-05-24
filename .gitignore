@@ -11,6 +11,7 @@ MATLAB/TDOA Localization code/TDOA Localization/Machine Learning (ML)/best_model
 # All other data/ subfolders (performance_evaluation, classification_output, etc.)
 # are tracked normally.
 /data/raw/
+/data/features/
 /data/noise/
 /data/interim_measured/
 /src/ingestion/_csv_tmp/

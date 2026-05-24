@@ -1,0 +1,58 @@
+# =============================================================================
+# Experiment Configuration: exp06_dec_tune
+# Model  : 2D CNN Backbone + Semi-Supervised Deep Embedded Clustering (DEC)
+# Input  : 2D STFT Magnitude Spectrograms
+# Task   : Phase 1 = SimCLR Self-Supervised Pre-Training
+#          Phase 2 = DEC Unsupervised Cluster Refinement + Pairwise Constraints
+# =============================================================================
+
+experiment:
+  name: "exp06_dec_tune"
+  description: "Optuna hyperparameter tuning for Semi-Supervised DEC on STFT features"
+  parent_node_id: "PLACEHOLDER"   # Set to the node_id of your extracted STFT features
+  task_type: "dec_semi"
+
+data:
+  sources:
+    - type: "synthesised"
+      path: "data/features/stft_magnitude/PLACEHOLDER" # Set to extracted STFT dir
+      train_shards: [1, 2, 3, 4]
+      val_shards: [17, 18]
+  max_pulse_len: 4096
+  label_fraction: 0.10   # 10% labels unmasked for Semi-Supervised pairwise constraints
+  augment: true
+
+model:
+  in_channels: 1
+  base_channels: 16
+  embedding_dim: 128
+  n_clusters: 10
+
+task:
+  simclr_temperature: 0.5
+  dec_update_interval: 140
+  dec_tol: 0.001
+  pairwise_weight_gamma: 1.0
+
+training:
+  device: "auto"
+  batch_size: 64
+  phase1_epochs: 10
+  phase2_epochs: 10
+  epochs: 20
+  learning_rate_phase1: 0.001
+  learning_rate_phase2: 0.0001
+
+output:
+  weights_dir: "models/weights"
+  config_snapshot_dir: "models/configuration_snapshots"
+  results_dir: "data/classification_output/exp06_dec"
+  eval_dir: "data/performance_evaluation/classification/exp06_dec"
+
+tune:
+  n_trials: 15
+  search_space:
+    learning_rate_phase1: [1e-5, 1e-2]
+    learning_rate_phase2: [1e-5, 1e-2]
+    pairwise_weight_gamma: [0.1, 10.0]
+    base_channels: [16, 32, 64]

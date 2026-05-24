@@ -64,7 +64,7 @@ def ingest_cwru_directory(
 
     global_pulse_id = 0
     class_mapping = {}
-    next_class_id = 0
+    next_class_id = 11
     
     # Tracking for the Summary Report
     missing_channel_files = []
@@ -248,7 +248,7 @@ if __name__ == "__main__":
     # TOGGLE THIS:
     # True = 'IR007_0' and 'IR007_3' become the same Class ID.
     # False = 'IR007_0' and 'IR007_3' become different Class IDs.
-    GROUP_BY_FAULT_LOCATION = True 
+    GROUP_BY_FAULT_LOCATION = False
     
     # Filter settings:
     # Set to an integer to limit the number of scenes per file, or None to ingest all.

@@ -594,7 +594,7 @@ def main():
         parent_id        = parent_id,
         stage            = "classification",   # Routing Rule: most downstream task
         method           = task_type,
-        folder_path      = weights_dir,         # actual artifact location
+        folder_path      = f'{os.path.join(os.path.abspath(out_cfg["config_snapshot_dir"]), f"config_{node_id}.yaml")};{os.path.join(os.path.abspath(out_cfg["weights_dir"]), f"model_{node_id}.pt")};{os.path.abspath(os.path.join("data", "performance_evaluation", "training", f"{node_id}_timing.json"))}',
         appended_history = history_line,
         force_node_id    = node_id,
     )
