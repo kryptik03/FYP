@@ -1,6 +1,0 @@
-{
-    "learning_rate_phase1": 0.00010649113972990757,
-    "learning_rate_phase2": 1.1344543738501398e-05,
-    "pairwise_weight_gamma": 0.10179268107710708,
-    "base_channels": 32
-}

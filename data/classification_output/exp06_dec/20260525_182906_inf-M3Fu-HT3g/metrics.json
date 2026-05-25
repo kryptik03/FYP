@@ -1,0 +1,34 @@
+{
+    "classification_accuracy": 0.8927405174579252,
+    "silhouette_score": -0.06683380156755447,
+    "grouping_precision": 0.9549248747913188,
+    "grouping_recall": 0.11973540986351838,
+    "grouping_f1": 0.21278970276403408,
+    "n_pulses": 15924,
+    "n_clusters_found": 15,
+    "n_noise_points": 0,
+    "n_gt_instances": 3981,
+    "n_pred_instances": 13252,
+    "per_class_stats": {
+        "3": {
+            "name": "PD2 Incision Measured",
+            "count": 5844,
+            "accuracy": 0.7221
+        },
+        "4": {
+            "name": "PD3 Delamination Measured",
+            "count": 10080,
+            "accuracy": 0.9917
+        }
+    },
+    "checkpoint_id": "M3Fu",
+    "time_threshold": 1e-07,
+    "dist_threshold": 0.5,
+    "min_cluster_size": 5,
+    "epsilon": 5.0,
+    "reduce_method": "tsne",
+    "reduce_dims": 3,
+    "sources": [
+        "data/features/stft_magnitude/20260525_132349-ms-HvA1-kmqo:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"
+    ]
+}
