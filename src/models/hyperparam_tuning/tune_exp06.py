@@ -161,33 +161,89 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, default="src/models/configs/tune_exp06_dec.yaml")
     args = parser.parse_args()
 
-    with open(args.config, "r") as f:
+    config_path = os.path.abspath(args.config)
+    with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
     print(f"Starting Optuna hyperparameter tuning for {config['experiment']['name']}")
     
     study = optuna.create_study(direction="minimize", study_name=config['experiment']['name'])
-    
     n_trials = config.get("tune", {}).get("n_trials", 10)
-    
     study.optimize(lambda trial: objective(trial, config), n_trials=n_trials)
     
-    print("\n[Tuning Complete] Best trial:")
-    trial = study.best_trial
-    print(f"  Value (Validation Loss): {trial.value}")
+    best = study.best_trial
+    print(f"\n[Tuning Complete] Best trial:")
+    print(f"  Value (Validation Loss): {best.value}")
     print("  Params: ")
-    for key, value in trial.params.items():
+    for key, value in best.params.items():
         print(f"    {key}: {value}")
-        
-    # Save the best parameters to a JSON file
-    output_dir = os.path.abspath(config["output"].get("config_snapshot_dir", "models/configuration_snapshots"))
-    os.makedirs(output_dir, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    best_params_path = os.path.join(output_dir, f"best_tune_exp06_params_{timestamp}.json")
-    
-    import json
-    with open(best_params_path, "w") as f:
-        json.dump(trial.params, f, indent=4)
-        
-    print(f"\n[Saved] Best hyperparameters saved to: {best_params_path}")
+
+    # -----------------------------------------------------------------------
+    # 1. Write best parameters back into the YAML config file
+    # -----------------------------------------------------------------------
+    # Re-read the YAML raw text so we preserve comments
+    import json, string, random
+    import ruamel.yaml
+
+    ryaml = ruamel.yaml.YAML()
+    ryaml.preserve_quotes = True
+    with open(config_path, "r") as f:
+        doc = ryaml.load(f)
+
+    tune_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tune_node_id   = "".join(random.choices(string.ascii_letters + string.digits, k=4))
+
+    # Overwrite training hyperparams that Optuna tuned
+    if "learning_rate_phase1" in best.params:
+        doc["training"]["learning_rate_phase1"] = round(best.params["learning_rate_phase1"], 10)
+    if "learning_rate_phase2" in best.params:
+        doc["training"]["learning_rate_phase2"] = round(best.params["learning_rate_phase2"], 10)
+
+    # Overwrite model/task params that Optuna tuned
+    if "base_channels" in best.params:
+        doc["model"]["base_channels"] = int(best.params["base_channels"])
+    if "pairwise_weight_gamma" in best.params:
+        doc["task"]["pairwise_weight_gamma"] = round(best.params["pairwise_weight_gamma"], 6)
+
+    # Stamp tuning metadata into the training block
+    doc["training"]["tuned_at"]      = tune_timestamp
+    doc["training"]["tuning_node_id"] = tune_node_id
+    doc["training"]["tuning_val_loss"] = round(float(best.value), 8)
+
+    with open(config_path, "w") as f:
+        ryaml.dump(doc, f)
+    print(f"\n[Saved] Best params written back to: {config_path}")
+
+    # -----------------------------------------------------------------------
+    # 2. Register this tuning run in the lineage database
+    # -----------------------------------------------------------------------
+    _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
+    from src.utils.lineage_tracker import register_process
+
+    parent_id = config["experiment"].get("parent_node_id", "NONE")
+    register_process(
+        parent_id        = parent_id,
+        stage            = "hyperparameter_tuning",
+        method           = "optuna",
+        folder_path      = config_path,
+        appended_history = (
+            f"Optuna tuning ({n_trials} trials). "
+            f"Best val loss: {best.value:.6f}. "
+            f"Params: {json.dumps(best.params)}"
+        ),
+        force_node_id    = tune_node_id,
+        force_timestamp  = tune_timestamp,
+    )
+    print(f"[Lineage] Registered tuning node: {tune_node_id}")
+
+    # -----------------------------------------------------------------------
+    # 3. Write latest node ID to src/utils/latest_node.txt for Colab commits
+    # -----------------------------------------------------------------------
+    utils_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "utils"))
+    latest_node_path = os.path.join(utils_dir, "latest_node.txt")
+    with open(latest_node_path, "w") as f:
+        f.write(tune_node_id)
+    print(f"[Lineage] Latest node ID written to: {latest_node_path}")
+

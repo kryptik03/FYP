@@ -1,6 +1,12 @@
 """
-train.py
-========
+train.py  [LEGACY ORCHESTRATOR]
+================================
+> **New experiments should use the dedicated training scripts in src/models/train/**
+> For example:  python src/models/train/train_exp06.py
+>
+> This script is kept for backward compatibility with Exp01–Exp05.
+> It will not be updated to support new task types going forward.
+
 Universal DAG Orchestrator for the FYP PD Deep Learning Pipeline.
 
 This is the ONLY script the user executes:
@@ -172,9 +178,29 @@ def _build_datasets_and_task(config: dict, task_type: str):
         )
         task = DECTask(config)
 
+    elif task_type == "dec_semi":
+        from src.models.data.dataset_exp06_dec import DECDataset_Exp06
+        from src.models.tasks.task_exp06_dec   import SemiSupervisedDECTask
+        sources = data_cfg["sources"]
+        train_ds = DECDataset_Exp06(
+            sources       = sources,
+            shard_key     = "train_shards",
+            max_pulse_len = data_cfg["max_pulse_len"],
+            augment       = True,
+            label_fraction= data_cfg.get("label_fraction", 0.10),
+        )
+        val_ds = DECDataset_Exp06(
+            sources       = sources,
+            shard_key     = "val_shards",
+            max_pulse_len = data_cfg["max_pulse_len"],
+            augment       = True,
+            label_fraction= data_cfg.get("label_fraction", 0.10),
+        )
+        task = SemiSupervisedDECTask(config)
+
     else:
         raise ValueError(f"[Error] Unknown task_type in config: '{task_type}'. "
-                         f"Choose from: detection, classification, contrastive, dec")
+                         f"Choose from: detection, classification, contrastive, dec, dec_spherical, dec_semi")
 
     return train_ds, val_ds, task
 from src.utils.lineage_tracker import register_process
@@ -248,7 +274,7 @@ def main():
     # 3. Smoke-test overrides                                                   #
     # ----------------------------------------------------------------------- #
     if args.smoke_test:
-        if task_type in ["dec", "dec_spherical"]:
+        if task_type in ["dec", "dec_spherical", "dec_semi"]:
             # Override shards inside each source
             for src in data_cfg["sources"]:
                 src["train_shards"] = [src["train_shards"][0]]
@@ -335,11 +361,13 @@ def main():
     # ----------------------------------------------------------------------- #
     # Special two-phase DEC training path                                       #
     # ----------------------------------------------------------------------- #
-    if task_type in ["dec", "dec_spherical"]:
+    if task_type in ["dec", "dec_spherical", "dec_semi"]:
         if task_type == "dec":
             from src.models.data.dataset_exp04_dec import DECDataset
-        else:
+        elif task_type == "dec_spherical":
             from src.models.data.dataset_exp05_dec import DECDataset
+        else:
+            from src.models.data.dataset_exp06_dec import DECDataset_Exp06 as DECDataset
         import numpy as np
 
         phase1_epochs = train_cfg.get("phase1_epochs", 20)
@@ -419,15 +447,18 @@ def main():
         task.set_phase(2, lr2)
 
         # Rebuild loaders with un-augmented data for Phase 2
+        # For dec_semi, we also need to pass the label_fraction to avoid errors
+        dataset_kwargs = {"sources": data_cfg["sources"], "max_pulse_len": data_cfg["max_pulse_len"], "augment": False}
+        if task_type == "dec_semi":
+            dataset_kwargs["label_fraction"] = data_cfg.get("label_fraction", 0.10)
+            
         train_loader_p2 = DataLoader(
-            DECDataset(sources=data_cfg["sources"], shard_key="train_shards",
-                       max_pulse_len=data_cfg["max_pulse_len"], augment=False),
+            DECDataset(shard_key="train_shards", **dataset_kwargs),
             batch_size=train_cfg["batch_size"], shuffle=True, num_workers=0,
             pin_memory=(device.type == "cuda"),
         )
         val_loader_p2 = DataLoader(
-            DECDataset(sources=data_cfg["sources"], shard_key="val_shards",
-                       max_pulse_len=data_cfg["max_pulse_len"], augment=False),
+            DECDataset(shard_key="val_shards", **dataset_kwargs),
             batch_size=train_cfg["batch_size"], shuffle=False, num_workers=0,
             pin_memory=(device.type == "cuda"),
         )
@@ -440,7 +471,12 @@ def main():
             train_losses = None
             for batch in train_loader_p2:
                 batch = move_batch_to_device(batch, device)
-                _, loss_dict = task.training_step_phase2(batch)
+                if task_type == "dec_semi":
+                    # For dec_semi, batch is (view1, reported_class, ...) where view1 is signal
+                    dec_batch = (batch[0], batch[1])
+                else:
+                    dec_batch = batch
+                _, loss_dict = task.training_step_phase2(dec_batch)
                 if train_losses is None:
                     train_losses = {k: 0.0 for k in loss_dict}
                 for k in loss_dict:
@@ -450,7 +486,11 @@ def main():
             val_metrics = None
             for batch in val_loader_p2:
                 batch = move_batch_to_device(batch, device)
-                m = task.validation_step(batch)
+                if task_type == "dec_semi":
+                    dec_batch = (batch[0], batch[1])
+                else:
+                    dec_batch = batch
+                m = task.validation_step(dec_batch)
                 if val_metrics is None:
                     val_metrics = {k: 0.0 for k in m}
                 for k in m:
@@ -486,7 +526,7 @@ def main():
                         config_path)
                     print(f"    ^ New best Phase2 val KL: {best_val_loss_p2:.4f}")
 
-        if task_type == "dec_spherical":
+        if task_type in ["dec_spherical", "dec_semi"]:
             best_val_loss = best_val_loss_p2
         else:
             best_val_loss = val_metrics["total"]   # Report the final epoch's val KL

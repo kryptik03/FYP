@@ -32,7 +32,7 @@ data:
 
 model:
   in_channels: 1
-  base_channels: 16
+  base_channels: 32        # Tuned by Optuna (was 16)
   embedding_dim: 128
   n_clusters: 10
 
@@ -40,7 +40,7 @@ task:
   simclr_temperature: 0.5
   dec_update_interval: 140
   dec_tol: 0.001
-  pairwise_weight_gamma: 1.0
+  pairwise_weight_gamma: 0.101793  # Tuned by Optuna (was 1.0)
 
 training:
   device: "auto"
@@ -48,8 +48,11 @@ training:
   phase1_epochs: 10
   phase2_epochs: 10
   epochs: 20
-  learning_rate_phase1: 0.001
-  learning_rate_phase2: 0.0001
+  learning_rate_phase1: 0.0001065    # Tuned by Optuna (was 0.001)
+  learning_rate_phase2: 0.0000113    # Tuned by Optuna (was 0.0001)
+  tuned_at: "20260524_192323"
+  tuning_node_id: "manual"
+  tuning_val_loss: ~  # not recorded for this run
 
 output:
   weights_dir: "models/weights"

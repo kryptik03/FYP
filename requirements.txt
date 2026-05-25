@@ -8,6 +8,7 @@ optuna
 # Data I/O & Configuration
 h5py>=3.10.0
 PyYAML>=6.0.0
+ruamel.yaml>=0.18.0
 
 # Waveform Analysis
 PyWavelets>=1.4.0
