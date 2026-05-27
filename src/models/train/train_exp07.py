@@ -340,7 +340,6 @@ def main():
     total_params = sum(p.numel() for p in task.parameters() if p.requires_grad)
     print(f"[Model] Trainable params: {total_params:,}")
 
-    best_val_loss = float("inf")
     best_epoch    = -1
     epoch_times   = []
     train_start   = time.time()
@@ -374,6 +373,8 @@ def main():
     print(f"\n[P1] === SupCon Pre-Training ({phase1_epochs} epochs) ===")
     task.set_phase(1, lr=lr1)
 
+    best_val_loss_p1 = float("inf")
+
     for epoch in range(1, phase1_epochs + 1):
         t0 = time.time()
         task.train()
@@ -383,7 +384,8 @@ def main():
             _, ld = task.training_step_phase1(batch)
             for k, v in ld.items():
                 train_losses[k] = train_losses.get(k, 0.0) + v
-        train_losses = {k: v / len(train_loader_p1) for k, v in train_losses.items()}
+        if len(train_loader_p1) > 0:
+            train_losses = {k: v / len(train_loader_p1) for k, v in train_losses.items()}
         epoch_grad_norm = get_grad_norm(task.backbone)
 
         task.eval()
@@ -394,7 +396,8 @@ def main():
                 m = task.validation_step(batch)
                 for k, v in m.items():
                     val_metrics[k] = val_metrics.get(k, 0.0) + v
-        val_metrics = {k: v / len(val_loader_p1) for k, v in val_metrics.items()}
+        if len(val_loader_p1) > 0:
+            val_metrics = {k: v / len(val_loader_p1) for k, v in val_metrics.items()}
 
         elapsed = time.time() - t0
         epoch_times.append(round(elapsed, 2))
@@ -406,11 +409,12 @@ def main():
               f"Val SupCon: {val_metrics['supcon']:.4f} | "
               f"GradNorm: {epoch_grad_norm:.4f} | {elapsed:.1f}s")
 
-        if val_metrics["total"] < best_val_loss:
-            best_val_loss = val_metrics["total"]
-            best_epoch    = epoch
+        if val_metrics["total"] < best_val_loss_p1:
+            best_val_loss_p1 = val_metrics["total"]
+            best_epoch = epoch
+            # Save a Phase 1 backbone checkpoint — this will be overwritten by Phase 2 if P2 runs.
             task.save_checkpoint(epoch, node_id, weights_dir, config_snap_dir, config_path)
-            print(f"    ^ Best P1 val loss: {best_val_loss:.4f}")
+            print(f"    ^ Best P1 val loss: {best_val_loss_p1:.4f}")
 
     # -----------------------------------------------------------------------
     # K-Means Centroid Initialization (between Phase 1 and 2)
@@ -431,6 +435,8 @@ def main():
             sig = batch[0].to(device)
             z = task.backbone(sig)
             all_embs.append(z.cpu().numpy())
+    if not all_embs:
+        raise RuntimeError("No embeddings extracted for K-Means init")
     task.init_cluster_centroids(np.concatenate(all_embs, axis=0))
     kmeans_time_s = round(time.time() - kmeans_t0, 2)
     print(f"[Init] K-Means init completed in {kmeans_time_s:.1f}s")
@@ -466,7 +472,8 @@ def main():
             _, ld = task.training_step_phase2(dec_batch)
             for k, v in ld.items():
                 train_losses[k] = train_losses.get(k, 0.0) + v
-        train_losses = {k: v / len(train_loader_p2) for k, v in train_losses.items()}
+        if len(train_loader_p2) > 0:
+            train_losses = {k: v / len(train_loader_p2) for k, v in train_losses.items()}
         epoch_grad_norm = get_grad_norm(task)
 
         task.eval()
@@ -478,7 +485,8 @@ def main():
                 m = task.validation_step(dec_batch)
                 for k, v in m.items():
                     val_metrics[k] = val_metrics.get(k, 0.0) + v
-        val_metrics = {k: v / len(val_loader_p2) for k, v in val_metrics.items()}
+        if len(val_loader_p2) > 0:
+            val_metrics = {k: v / len(val_loader_p2) for k, v in val_metrics.items()}
 
         elapsed = time.time() - t0
         epoch_times.append(round(elapsed, 2))
@@ -507,7 +515,10 @@ def main():
     # Save timing + metrics JSON into the run folder
     # -----------------------------------------------------------------------
     total_elapsed = time.time() - train_start
-    gpu_name = torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu"
+    try:
+        gpu_name = torch.cuda.get_device_name() if device.type == "cuda" else "cpu"
+    except Exception:
+        gpu_name = "cuda"
     timing_report = {
         # ── Identity ────────────────────────────────────────────────────────
         "node_id"              : node_id,
@@ -545,8 +556,8 @@ def main():
         "supcon_temperature"   : config.get("task", {}).get("simclr_temperature", None),
         # ── Results ─────────────────────────────────────────────────────────
         "best_epoch"           : best_epoch,
-        "best_val_loss_p1"     : round(min(history["p1_val_supcon"]), 6) if history["p1_val_supcon"] else None,
-        "best_val_loss_p2"     : round(best_val_loss, 6),
+        "best_val_loss_p1"     : round(best_val_loss_p1, 6),
+        "best_val_loss_p2"     : round(best_val_loss_p2, 6),
         # ── Loss History ─────────────────────────────────────────────────────
         "loss_history"         : history,
     }
@@ -573,9 +584,9 @@ def main():
     tuning_note  = (f" | Tuned by node {train_cfg['tuning_node_id']} @ {train_cfg.get('tuned_at','?')}"
                     if "tuning_node_id" in train_cfg else "")
     perf_note = (
-        f" | BestValP1: {min(history['p1_val_supcon']):.4f}"
+        f" | BestValP1: {best_val_loss_p1:.4f}"
         if history["p1_val_supcon"] else ""
-    ) + f" | BestValP2: {best_val_loss:.4f} | BestEpoch: {best_epoch}"
+    ) + f" | BestValP2: {best_val_loss_p2:.4f} | BestEpoch: {best_epoch}"
 
     new_node = register_process(
         parent_id        = parent_id,
@@ -594,7 +605,7 @@ def main():
     # Write latest node ID for Colab commit messages
     write_latest_node(node_id)
 
-    print(f"\n[Done] Best epoch: {best_epoch} | Best val loss: {best_val_loss:.6f}")
+    print(f"\n[Done] Best epoch: {best_epoch} | Best P2 val loss: {best_val_loss_p2:.6f}")
     print(f"[Done] Weights    -> {weights_dir}/model_{node_id}.pt")
     print(f"[Done] Perf data  -> {run_dir}")
 

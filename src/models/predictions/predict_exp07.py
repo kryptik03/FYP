@@ -103,7 +103,7 @@ def load_weights(checkpoint_id: str, task: SupConDECTask):
     p = os.path.abspath(f"models/weights/model_{checkpoint_id}.pt")
     if not os.path.exists(p):
         print(f"[Error] Weights not found: {p}"); sys.exit(1)
-    ckpt = torch.load(p, map_location="cpu", weights_only=False)
+    ckpt = torch.load(p, map_location="cpu")
     task.load_state_dict(ckpt["model_state"])
     print(f"[Checkpoint] Loaded {p}  (epoch {ckpt.get('epoch', '?')})")
 
@@ -154,14 +154,14 @@ def extract_features(task: SupConDECTask, loader: DataLoader,
     """
     task.eval()
     records = []
+    global_idx = 0
     with torch.no_grad():
-        for batch_idx, batch in enumerate(loader):
+        for batch in loader:
             sig = batch[0].to(device)
             z, q = task(sig)
             z = z.cpu().numpy()
             q = q.cpu().numpy()
             for b in range(sig.shape[0]):
-                global_idx = batch_idx * loader.batch_size + b
                 if global_idx >= len(dataset.index):
                     break
                 (shard_path, scene_idx, ch_idx, start_idx, end_idx,
@@ -178,6 +178,7 @@ def extract_features(task: SupConDECTask, loader: DataLoader,
                     "emb":          z[b],
                     "soft_q":       q[b],
                 })
+                global_idx += 1
     print(f"[Inference] Extracted {len(records)} pulse embeddings.")
     return records
 
