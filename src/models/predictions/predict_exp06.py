@@ -58,6 +58,7 @@ from src.utils.lineage_tracker         import register_process, get_node_history
 CLASS_NAMES = {
     0:  "PD1 Void Simulated",
     1:  "PD2 Incision Simulated",
+    2:  "PD1 Void Measured",
     3:  "PD2 Incision Measured",
     4:  "PD3 Delamination Measured",
     5:  "PD4 FeOx Measured",

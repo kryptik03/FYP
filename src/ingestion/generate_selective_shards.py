@@ -86,7 +86,9 @@ def _default_class_id(filename: str) -> int:
     m = re.search(r"PD(\d+)", filename, re.IGNORECASE)
     if m:
         num = int(m.group(1))
-        if num == 2:
+        if num == 1:
+            return 2
+        elif num == 2:
             return 3
         elif num == 3:
             return 4
