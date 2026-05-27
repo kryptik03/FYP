@@ -28,4 +28,4 @@ def print_h5_dataset(filepath, dataset_name="labels", num_rows=5):
             print(f"  {key}: {val}")
 
 # Run the function
-print_h5_dataset(r"data\raw\measured\20260527_203746_ms-nQgf-nQgf\shard_01.h5", "labels", 5)
+print_h5_dataset(r"data\interim_measured\isolated_waveforms\PD3_Delam_Batch1_8kv.h5", "labels", 5)

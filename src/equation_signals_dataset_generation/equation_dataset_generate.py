@@ -248,7 +248,7 @@ def generate_shards(
             h5f.attrs["shard_id"]            = shard_id
             h5f.attrs["root_id"]             = root_id
             h5f.attrs["node_id"]             = root_id
-            h5f.attrs["origin"]              = "sy"
+            h5f.attrs["origin"]              = "eq"
             h5f.attrs["noise_type"]          = noise_type
 
     log.info("Done. Generated %d shards -> %s", num_shards, output_dir)
@@ -287,7 +287,7 @@ def main():
 
     print(f"\nRegistering to lineage database...")
     register_root_dataset(
-        origin          = "sy",
+        origin          = "eq",
         method          = "equation_dataset_generate",
         folder_path     = str(output_dir),
         nickname        = NICKNAME,
