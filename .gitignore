@@ -12,6 +12,7 @@ MATLAB/TDOA Localization code/TDOA Localization/Machine Learning (ML)/best_model
 # are tracked normally.
 /data/raw/
 /data/features/
+/scratch/
 /data/noise/
 /data/interim_measured/
 /src/ingestion/_csv_tmp/
