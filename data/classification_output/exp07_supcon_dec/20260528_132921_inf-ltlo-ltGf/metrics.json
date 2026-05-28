@@ -1,31 +1,31 @@
 {
-    "classification_accuracy": 0.9923609109253387,
-    "silhouette_score": -0.046982280910015106,
-    "grouping_precision": 0.968015170670038,
-    "grouping_recall": 0.961693041949259,
-    "grouping_f1": 0.9648437499999999,
+    "classification_accuracy": 0.6699553823917551,
+    "silhouette_score": 0.5870426297187805,
+    "grouping_precision": 0.9668238067177372,
+    "grouping_recall": 0.686887716654107,
+    "grouping_f1": 0.8031623262189153,
     "n_pulses": 15924,
-    "n_clusters_found": 171,
-    "n_noise_points": 8986,
+    "n_clusters_found": 2,
+    "n_noise_points": 11,
     "n_gt_instances": 3981,
-    "n_pred_instances": 4256,
+    "n_pred_instances": 6721,
     "per_class_stats": {
         "3": {
             "name": "PD2 Incision Measured",
             "count": 5844,
-            "accuracy": 0.4755
+            "accuracy": 0.1492
         },
         "4": {
             "name": "PD3 Delamination Measured",
             "count": 10080,
-            "accuracy": 0.4073
+            "accuracy": 0.9711
         }
     },
-    "checkpoint_id": "6WeW",
+    "checkpoint_id": "ltlo",
     "time_threshold": 1e-07,
     "dist_threshold": 0.5,
     "min_cluster_size": 5,
-    "epsilon": 0.0,
+    "epsilon": 0.5,
     "reduce_method": "none",
     "reduce_dims": 2,
     "sources": [
