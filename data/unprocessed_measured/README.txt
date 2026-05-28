@@ -20,3 +20,6 @@ Pipeline Flow:
 Sampling Info:
 --------------
 Sampled at 5 GHz (0.2ns resolution).
+
+PD2, PD3 and PD5 at 3.7, 7, 0.1
+PD4 at 3.7, 5, 0.1

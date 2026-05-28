@@ -609,6 +609,28 @@ def main():
     with open(os.path.join(out_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=4)
 
+    # 7.5 Save predictions to HDF5
+    import h5py
+    h5_path = os.path.join(out_dir, "predictions.h5")
+    with h5py.File(h5_path, "w") as f:
+        # Standardise keys
+        for r in results:
+            r["cluster_id"] = r.get("hdb_cluster", -1)
+            r["pred_class_id"] = cluster_map.get(r["cluster_id"], -1)
+            
+        keys_to_save = ["shard_path", "scene_idx", "ch_idx", "start_idx", 
+                        "gt_class_id", "pred_class_id", "cluster_id", 
+                        "gt_inst_id", "pred_inst_id", "time_res"]
+        for k in keys_to_save:
+            values = [r.get(k, -1) for r in results]
+            if not values:
+                continue
+            if isinstance(values[0], str):
+                f.create_dataset(k, data=np.array(values, dtype=object), dtype=h5py.string_dtype(encoding='utf-8'))
+            else:
+                f.create_dataset(k, data=np.array(values))
+    print(f"[Export] Saved pulse mappings -> {h5_path}")
+
     # 8. Plots
     plot_embeddings(results, hdb_labels, cluster_map, out_dir)
     plot_cluster_composition(results, hdb_labels, cluster_map, out_dir)

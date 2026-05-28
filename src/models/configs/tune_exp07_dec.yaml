@@ -8,7 +8,7 @@
 
 experiment:
   name: "exp07_supcon_dec"
-  description: "SupCon & Semi-Supervised DEC on STFT features. CWRU, Synthesised,
+  description: "SupCon & Semi-Supervised DEC on STFT features. Synthesised,
     Measured (Void) & Eqn datasets."
   parent_node_id: "N5ZR"   # Set to the node_id of your extracted STFT features
   task_type: "supcon_dec_semi"
