@@ -1,34 +1,38 @@
 """
 backbone_exp08.py
 =================
-Vision Transformer (ViT) backbone for Exp08 — Partial Discharge classification
-using 2D Bispectrum representations.
+Custom mini-Vision Transformer (ViT) backbone for Exp08 — Partial Discharge
+classification using Welch-method 2D Bispectrum representations.
 
 ARCHITECTURE OVERVIEW
 ---------------------
                 ┌──────────────────────────────────────┐
-  Input         │  (B, 1, 224, 224)  ← 1-channel       │
-  Bispectrum    │  bispectrum image after AdaptivePool  │
+  Input         │  (B, 1, 128, 128)  ← 1-channel       │
+  Bispectrum    │  bispectrum image after 129→128 crop  │
                 └───────────────┬──────────────────────┘
                                 │
                 ┌───────────────▼──────────────────────┐
-  Patch         │  1-channel → 3-channel               │
-  Conversion    │  via Conv2d(1, 3, 1×1)               │
-                │  (no pretrained RGB assumption)       │
+  Patch         │  Conv2d(1, d_model, 16×16, stride=16) │
+  Embedding     │  Flattens image → 64 patch tokens     │
+                │  (8×8 grid of 16×16 patches)          │
+                │  output: (B, 64, d_model)             │
                 └───────────────┬──────────────────────┘
                                 │
                 ┌───────────────▼──────────────────────┐
-  ViT Encoder   │  torchvision ViT-B/16 (pretrained)   │
-                │  Patch size: 16×16                    │
-                │  Sequence len: (224/16)² + 1 = 197    │
-                │  d_model: 768                         │
-                │  We keep ALL transformer layers.      │
-                │  Classification head is STRIPPED.     │
+  [CLS] token   │  Prepended learnable token            │
+  + Pos Embed   │  + learnable 1D position embeddings  │
+                │  sequence length: 64 + 1 = 65         │
                 └───────────────┬──────────────────────┘
-                                │ [CLS] token → shape (B, 768)
+                                │
                 ┌───────────────▼──────────────────────┐
-  Projector     │  Linear(768, 768) → ReLU             │
-                │  Linear(768, 128)                     │
+  Transformer   │  N × TransformerEncoderLayer          │
+  Encoder       │  (Multi-head self-attention + FFN)    │
+                │  d_model=384, nhead=6, N=6 layers     │
+                └───────────────┬──────────────────────┘
+                                │ [CLS] token → (B, 384)
+                ┌───────────────▼──────────────────────┐
+  Projector     │  Linear(384, 384) → ReLU             │
+                │  Linear(384, 128)                     │
                 └───────────────┬──────────────────────┘
                                 │ (B, 128)
                 ┌───────────────▼──────────────────────┐
@@ -38,56 +42,190 @@ ARCHITECTURE OVERVIEW
                                 │
                            (B, 128)  ← embedding_dim
 
-WHY ViT?
---------
-The bispectrum is a 2D frequency-frequency map with long-range phase coupling
-encoded as spatial patterns. ViT's self-attention mechanism excels at capturing
-these non-local relationships across the full (224, 224) grid without the
-locality bias of CNNs. The [CLS] token aggregates global context across all
-bispectral frequency pairs, which is exactly what we want for PD classification.
+WHY A CUSTOM MINI-ViT (not torchvision vit_b_16)?
+--------------------------------------------------
+torchvision's vit_b_16 HARDCODES image_size=224 inside its positional
+embedding and _process_input method.  Feeding a 128×128 image raises
+a runtime shape error because the sequence length (64 tokens for 128/16=8
+patches per axis) does not match the pretrained positional embedding that
+expects 196 tokens (14 patches per axis at 224/16).
+
+Instead we build a custom mini-ViT that is configured from scratch for:
+    image_size  = 128
+    patch_size  = 16
+    num_patches = (128/16)² = 64        ← 8×8 grid
+    seq_length  = 64 + 1 (CLS) = 65
+
+This avoids the image_size mismatch entirely and produces a model that is:
+  - ~3× smaller than ViT-B/16 (~27 M params vs ~86 M)
+  - Correct for 128×128 inputs
+  - Still parameter-free pretrained initialisation → trained from scratch on bispectra
+
+WHY d_model=384, nhead=6, N=6?
+--------------------------------
+The "ViT-Small" configuration from the original DeiT paper:
+  d_model=384, nhead=6, mlp_ratio=4, depth=6
+scales well to our 64-token sequences and has proven effective for compact
+image domains.  It hits a good balance between expressiveness and GPU memory
+during SupCon training with batch_size=32 on a single GPU.
 
 WHY L2 NORMALIZE?
 -----------------
 Both SupCon and Spherical DEC operate on the unit hypersphere (cosine geometry).
 L2-normalising the output embedding ensures:
-  - SupCon: dot product = cosine similarity → stable, temperature-scaled contrastive loss.
-  - DEC: cluster centroids are also L2-normalised → soft assignments use cosine distances.
-
-IN_CHANNELS = 1 (not 3)
-------------------------
-Bispectra are single-channel magnitude images (grayscale), not RGB.
-We handle this by converting 1-ch → 3-ch with a learned 1×1 conv before
-feeding the ViT, which allows us to use pretrained ImageNet weights for
-the transformer blocks while adapting the first-pixel representation.
+  - SupCon: dot product = cosine similarity → stable, temperature-scaled loss.
+  - DEC: cluster centroids are also L2-normalised → soft assignments use
+         cosine distances.
 """
+
+import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-class DECViT_Exp08(nn.Module):
-    """
-    Vision Transformer backbone for Exp08.
+# ---------------------------------------------------------------------------
+# Mini-ViT building blocks
+# ---------------------------------------------------------------------------
 
-    Takes 1-channel 224×224 bispectrum images and outputs L2-normalised
-    128-dimensional embeddings for SupCon pre-training and DEC clustering.
+class PatchEmbedding(nn.Module):
+    """
+    Split image into non-overlapping patches and project each to d_model dims.
+
+    Implemented as a single Conv2d with kernel_size=patch_size and
+    stride=patch_size, which is mathematically identical to splitting then
+    applying a linear projection.
 
     Args:
-        in_channels   : Number of input channels (must be 1 for bispectra).
-        embedding_dim : Dimension of the final normalised embedding (default 128).
-        vit_variant   : Which torchvision ViT to use. Supports:
-                          "vit_b_16"  — 86M params, patch 16 (recommended)
-                          "vit_b_32"  — 88M params, patch 32 (faster, less detail)
-        pretrained    : Whether to load ImageNet-21k pretrained weights (True recommended).
+        in_channels : input image channels (1 for grayscale bispectra).
+        image_size  : spatial size of the input image (must be square).
+        patch_size  : size of each square patch (default 16).
+        d_model     : embedding dimension for each patch token.
     """
 
     def __init__(
         self,
-        in_channels:   int  = 1,
-        embedding_dim: int  = 128,
-        vit_variant:   str  = "vit_b_16",
-        pretrained:    bool = True,
+        in_channels: int = 1,
+        image_size:  int = 128,
+        patch_size:  int = 16,
+        d_model:     int = 384,
+    ):
+        super().__init__()
+        assert image_size % patch_size == 0, (
+            f"image_size={image_size} must be divisible by patch_size={patch_size}."
+        )
+        self.num_patches = (image_size // patch_size) ** 2   # 64 for 128/16=8
+
+        # One conv = one learned linear projection per patch
+        self.proj = nn.Conv2d(
+            in_channels, d_model,
+            kernel_size=patch_size, stride=patch_size,
+            bias=True,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x : (B, C, H, W)
+        Returns:
+            tokens : (B, num_patches, d_model)
+        """
+        x = self.proj(x)        # (B, d_model, H/P, W/P)
+        x = x.flatten(2)        # (B, d_model, num_patches)
+        x = x.transpose(1, 2)   # (B, num_patches, d_model)
+        return x
+
+
+class TransformerBlock(nn.Module):
+    """
+    Standard Pre-LN Transformer block:
+        x = x + Attention(LayerNorm(x))
+        x = x + FFN(LayerNorm(x))
+
+    Pre-LN (normalise before attention) is more stable for training from
+    scratch than the original Post-LN variant.
+
+    Args:
+        d_model    : token embedding dimension.
+        nhead      : number of self-attention heads (must divide d_model evenly).
+        mlp_ratio  : ratio of FFN hidden dim to d_model (default 4 → dim 4×d_model).
+        attn_drop  : dropout inside scaled dot-product attention.
+        ffn_drop   : dropout inside the FFN.
+    """
+
+    def __init__(
+        self,
+        d_model:   int   = 384,
+        nhead:     int   = 6,
+        mlp_ratio: float = 4.0,
+        attn_drop: float = 0.0,
+        ffn_drop:  float = 0.0,
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d_model, eps=1e-6)
+        self.attn  = nn.MultiheadAttention(
+            d_model, nhead,
+            dropout=attn_drop,
+            batch_first=True,   # input: (B, T, d_model)
+        )
+        self.norm2 = nn.LayerNorm(d_model, eps=1e-6)
+        mlp_hidden = int(d_model * mlp_ratio)
+        self.ffn   = nn.Sequential(
+            nn.Linear(d_model, mlp_hidden),
+            nn.GELU(),
+            nn.Dropout(ffn_drop),
+            nn.Linear(mlp_hidden, d_model),
+            nn.Dropout(ffn_drop),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Self-attention with Pre-LN and residual
+        normed = self.norm1(x)
+        attn_out, _ = self.attn(normed, normed, normed, need_weights=False)
+        x = x + attn_out
+
+        # FFN with Pre-LN and residual
+        x = x + self.ffn(self.norm2(x))
+        return x
+
+
+# ---------------------------------------------------------------------------
+# Full backbone
+# ---------------------------------------------------------------------------
+
+class DECViT_Exp08(nn.Module):
+    """
+    Custom mini-ViT backbone for Exp08.
+
+    Configured for 1-channel 128×128 bispectrum images.  Produces L2-normalised
+    128-dimensional embeddings for SupCon pre-training and DEC clustering.
+
+    Architecture: ViT-Small (d=384, nhead=6, depth=6), trained from scratch.
+
+    Args:
+        in_channels   : Input channels; must be 1 (grayscale bispectrum).
+        image_size    : Spatial size of the input grid (default 128).
+        patch_size    : Patch size (default 16); image_size must be divisible.
+        d_model       : Internal transformer embedding dimension (default 384).
+        nhead         : Number of attention heads (default 6, must divide d_model).
+        depth         : Number of transformer encoder blocks (default 6).
+        mlp_ratio     : FFN hidden dim multiplier (default 4.0).
+        embedding_dim : Final L2-normalised embedding dimension (default 128).
+        drop          : Dropout probability for attention and FFN (default 0.0).
+    """
+
+    def __init__(
+        self,
+        in_channels:   int   = 1,
+        image_size:    int   = 128,
+        patch_size:    int   = 16,
+        d_model:       int   = 384,
+        nhead:         int   = 6,
+        depth:         int   = 6,
+        mlp_ratio:     float = 4.0,
+        embedding_dim: int   = 128,
+        drop:          float = 0.0,
     ):
         super().__init__()
 
@@ -95,70 +233,61 @@ class DECViT_Exp08(nn.Module):
             raise ValueError(
                 f"DECViT_Exp08 expects 1-channel bispectra, got in_channels={in_channels}."
             )
-
-        self.embedding_dim = embedding_dim
-
-        # ------------------------------------------------------------------
-        # 1. 1-channel → 3-channel adapter
-        #    A learned 1×1 convolution to project the single bispectrum channel
-        #    into a 3-channel tensor that the pretrained ViT patch embedding
-        #    can accept.  This is much lighter-weight than replacing the entire
-        #    patch embedding and preserves pretrained representations.
-        # ------------------------------------------------------------------
-        self.channel_adapter = nn.Conv2d(
-            in_channels  = 1,
-            out_channels = 3,
-            kernel_size  = 1,
-            bias         = True,
-        )
-        nn.init.kaiming_normal_(self.channel_adapter.weight, mode="fan_out")
-        nn.init.zeros_(self.channel_adapter.bias)
-
-        # ------------------------------------------------------------------
-        # 2. ViT backbone (torchvision)
-        #    We load a pretrained ViT and strip the classification head.
-        #    The [CLS] token output from the final encoder block serves as
-        #    our global scene representation.
-        # ------------------------------------------------------------------
-        import torchvision.models as tv_models
-
-        weights_map = {
-            "vit_b_16": (tv_models.vit_b_16, tv_models.ViT_B_16_Weights.IMAGENET1K_V1 if pretrained else None),
-            "vit_b_32": (tv_models.vit_b_32, tv_models.ViT_B_32_Weights.IMAGENET1K_V1 if pretrained else None),
-        }
-        if vit_variant not in weights_map:
+        if image_size % patch_size != 0:
             raise ValueError(
-                f"Unknown vit_variant '{vit_variant}'. "
-                f"Choose from: {list(weights_map.keys())}"
+                f"image_size={image_size} must be divisible by patch_size={patch_size}."
             )
 
-        vit_constructor, weights = weights_map[vit_variant]
+        self.embedding_dim = embedding_dim
+        self.d_model       = d_model
 
-        if pretrained and weights is not None:
-            print(f"[DECViT_Exp08] Loading pretrained {vit_variant} weights "
-                  f"({weights.__class__.__name__})...")
-            vit = vit_constructor(weights=weights)
-        else:
-            print(f"[DECViT_Exp08] Initialising {vit_variant} from scratch (no pretrained weights).")
-            vit = vit_constructor(weights=None)
-
-        # The torchvision ViT's encoder produces hidden states; the 'heads'
-        # attribute is the linear classification head — we replace it with
-        # an identity to expose the [CLS] token directly.
-        d_model = vit.hidden_dim   # 768 for ViT-B variants
-
-        # Strip the classification head — we want the raw [CLS] token (768-D)
-        vit.heads = nn.Identity()
-
-        self.vit = vit
-        self._d_model = d_model
+        num_patches = (image_size // patch_size) ** 2   # 64 for 128/16=8
+        seq_length  = num_patches + 1                   # +1 for [CLS] token
 
         # ------------------------------------------------------------------
-        # 3. Projector: Linear → ReLU → Linear → embedding_dim
-        #    Maps the 768-D [CLS] token to a 128-D contrastive embedding.
-        #    Two linear layers with ReLU allow the projector to learn a
-        #    non-linear mapping that partially decouples the embedding space
-        #    from the ViT's ImageNet representation.
+        # 1. Patch Embedding
+        #    Conv2d(1, d_model, 16×16, stride=16) → (B, 64, d_model)
+        # ------------------------------------------------------------------
+        self.patch_embed = PatchEmbedding(
+            in_channels = in_channels,
+            image_size  = image_size,
+            patch_size  = patch_size,
+            d_model     = d_model,
+        )
+
+        # ------------------------------------------------------------------
+        # 2. [CLS] token + Positional Embedding
+        #    [CLS]: a learnable token prepended to the patch sequence.
+        #    Pos embed: one learnable vector per position (65 total).
+        # ------------------------------------------------------------------
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.pos_embed = nn.Parameter(torch.zeros(1, seq_length, d_model))
+
+        # Initialise positional embedding with sinusoidal values for stability
+        self._init_pos_embed(seq_length, d_model)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+
+        # ------------------------------------------------------------------
+        # 3. Transformer Encoder
+        #    N=6 Pre-LN TransformerBlock layers.
+        # ------------------------------------------------------------------
+        self.blocks = nn.ModuleList([
+            TransformerBlock(
+                d_model   = d_model,
+                nhead     = nhead,
+                mlp_ratio = mlp_ratio,
+                attn_drop = drop,
+                ffn_drop  = drop,
+            )
+            for _ in range(depth)
+        ])
+        self.norm = nn.LayerNorm(d_model, eps=1e-6)
+
+        # ------------------------------------------------------------------
+        # 4. Projector: d_model → d_model → embedding_dim
+        #    Non-linear projector partially decouples the embedding space
+        #    from the raw transformer representations, which is beneficial
+        #    for contrastive learning (SimCLR / SupCon finding).
         # ------------------------------------------------------------------
         self.projector = nn.Sequential(
             nn.Linear(d_model, d_model),
@@ -166,28 +295,75 @@ class DECViT_Exp08(nn.Module):
             nn.Linear(d_model, embedding_dim),
         )
 
+        # Weight initialisation
+        self._init_weights()
+
+    def _init_pos_embed(self, seq_length: int, d_model: int):
+        """
+        Sinusoidal positional embedding initialisation.
+        Provides a good starting point that encodes spatial distance before
+        the model has seen any data.
+        """
+        pe = torch.zeros(seq_length, d_model)
+        pos = torch.arange(seq_length).unsqueeze(1).float()
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(pos * div_term)
+        pe[:, 1::2] = torch.cos(pos * div_term[:d_model // 2])
+        self.pos_embed.data.copy_(pe.unsqueeze(0))
+
+    def _init_weights(self):
+        """Apply standard ViT weight initialisations."""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, std=0.02)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out")
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x : Tensor of shape (B, 1, 224, 224)  ← 1-channel bispectrum
+            x : Tensor of shape (B, 1, 128, 128)  ← 1-channel bispectrum
 
         Returns:
             z : L2-normalised embedding of shape (B, embedding_dim=128)
                 Lives on the unit hypersphere (||z||₂ = 1 for each sample).
         """
-        # Step 1: 1-channel → 3-channel adapter
-        x = self.channel_adapter(x)          # (B, 3, 224, 224)
+        B = x.shape[0]
 
-        # Step 2: ViT encoder → [CLS] token
-        # torchvision ViT._process_input returns patch tokens + [CLS].
-        # vit.forward with heads=Identity returns the [CLS] representation.
-        cls_token = self.vit(x)              # (B, 768)
+        # Step 1: Patch embedding → (B, 64, d_model)
+        tokens = self.patch_embed(x)
 
-        # Step 3: Project to embedding_dim
-        z = self.projector(cls_token)        # (B, 128)
+        # Step 2: Prepend [CLS] token → (B, 65, d_model)
+        cls = self.cls_token.expand(B, -1, -1)   # (B, 1, d_model)
+        tokens = torch.cat([cls, tokens], dim=1)  # (B, 65, d_model)
 
-        # Step 4: L2-normalise — project onto unit hypersphere
+        # Step 3: Add positional embedding
+        tokens = tokens + self.pos_embed          # (B, 65, d_model)
+
+        # Step 4: Pass through N transformer blocks
+        for block in self.blocks:
+            tokens = block(tokens)
+
+        # Step 5: Final LayerNorm
+        tokens = self.norm(tokens)                # (B, 65, d_model)
+
+        # Step 6: Extract [CLS] token (index 0) as the global representation
+        cls_out = tokens[:, 0, :]                 # (B, d_model)
+
+        # Step 7: Project to embedding_dim
+        z = self.projector(cls_out)               # (B, 128)
+
+        # Step 8: L2-normalise — project onto unit hypersphere
         # Required for both SupCon (cosine similarity) and Spherical DEC.
-        z = F.normalize(z, p=2, dim=1)      # (B, 128),  ||z||₂ = 1
+        z = F.normalize(z, p=2, dim=1)           # (B, 128),  ||z||₂ = 1
 
         return z

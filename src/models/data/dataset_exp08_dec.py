@@ -11,24 +11,21 @@ KEY CHANGES vs Exp07 (STFT-based dataset)
 2.  REMOVED: STFT-specific time-slicing logic (hop_length, s_t, e_t
     conversion, pad_or_crop_2d for time-axis).
 
-3.  ADDED: *** AdaptiveMaxPool2d downsampling ***
-    The bispectrum grid is (2049, 2049) — far too large to feed directly into
-    a ViT.  We downsample via:
-        torch.nn.functional.adaptive_max_pool2d(grid, (224, 224))
-    This is the "Adaptive Max Pool" step described in the Exp08 strategy.
-    Max pooling (vs average) is chosen to preserve the sharpest spectral
-    hotspots / energy peaks in the bispectrum surface.
+3.  REMOVED: AdaptiveMaxPool2d.  The Welch-method bispectrum grids are
+    already compact: 129 × 129 pixels.  We simply crop off one row and one
+    column (grid[:128, :128]) to make the size exactly divisible by the ViT
+    patch size of 16.  No pooling is needed or applied.
 
 4.  UPDATED: `_augment_2d` — SpecAugment masking now targets BOTH frequency
     axes (ω₁ and ω₂) of the bispectrum instead of time/freq axes of an STFT.
 
 Returned sample (Phase 1 — augmented):
     (view1, view2, reported_class_id, gt_inst_id, shard_path, scene_idx, time_res, actual_class_id)
-    All tensors in view1/view2 have shape (1, 224, 224).
+    All tensors in view1/view2 have shape (1, 128, 128).
 
 Returned sample (Phase 2 / inference — single):
     (signal, reported_class_id, gt_inst_id, shard_path, scene_idx, time_res, actual_class_id)
-    signal has shape (1, 224, 224).
+    signal has shape (1, 128, 128).
 """
 
 import os
@@ -37,7 +34,6 @@ import random
 import h5py
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 
@@ -50,7 +46,7 @@ def _augment_2d(bispectrum: np.ndarray) -> np.ndarray:
     Apply a random chain of lightweight augmentations to a bispectrum image.
 
     The input `bispectrum` has shape (1, H, W) — a single-channel 2D image —
-    where H=W=224 after AdaptiveMaxPool downsampling.
+    where H=W=128 after the 129→128 crop step.
 
     AUGMENTATION STRATEGY:
     1. Additive Gaussian Noise  — randomly perturbs spectral magnitudes
@@ -120,12 +116,15 @@ class DECDataset_Exp08(Dataset):
     """
     Multi-source bispectrum dataset for Exp08 (SupCon + Semi-Supervised DEC).
 
-    *** KEY STEP — AdaptiveMaxPool2d ***
-    Each bispectrum grid read from disk is (F, F) where F = n_fft//2+1 = 2049.
-    Before returning to the DataLoader, we apply:
-        F.adaptive_max_pool2d(tensor, (224, 224))
-    to produce a fixed (1, 224, 224) image. This makes it compatible with
-    torchvision ViT models while preserving the highest-energy frequency pairs.
+    *** KEY STEP — 129→28 Crop (NO pooling) ***
+    The Welch-method bispectra stored on disk are (129, 129) grids.
+    To satisfy the ViT-B/16 requirement that image dimensions are divisible by
+    the patch size (16), we crop to (128, 128) by slicing off the last row and
+    column:  grid = grid[:128, :128]
+
+    This is a 1-pixel discard, not a downsampling.  No information is lost in
+    practice because the highest bispectral frequency bin (Nyquist) is typically
+    near-zero energy for band-limited PD signals.
 
     Label row indices (same schema as all previous Exp datasets):
     """
@@ -137,9 +136,9 @@ class DECDataset_Exp08(Dataset):
     ROW_START_IDX  = 5
     ROW_END_IDX    = 6
 
-    # Target output resolution after AdaptiveMaxPool2d
-    # 224 × 224 is the canonical input size for ViT-B/16 and ViT-B/32.
-    TARGET_SIZE: int = 224
+    # After the 129→128 crop: output grid shape for ViT input.
+    # 128 is evenly divisible by patch_size=16 (gives 8×8=64 patches).
+    TARGET_SIZE: int = 128
 
     def __init__(
         self,
@@ -236,34 +235,34 @@ class DECDataset_Exp08(Dataset):
         ch_idx: int,
     ) -> np.ndarray:
         """
-        Load the pre-computed bispectrum grid for a single (scene, channel) and
-        apply AdaptiveMaxPool downsampling + normalisation.
+        Load the pre-computed bispectrum grid for a single (scene, channel),
+        crop from 129×129 → 128×128, and normalise.
+
+        *** KEY STEP — Crop, NO pooling ***
+        The grid produced by extract_bispectra.py is (129, 129).
+        We crop it to (128, 128) so the ViT's patch-embedding conv (patch=16)
+        divides evenly: 128/16 = 8 patches per axis = 64 total patch tokens.
+        Slicing grid[:128, :128] discards the single Nyquist-edge bin.
 
         Returns:
-            np.ndarray of shape (1, TARGET_SIZE, TARGET_SIZE) = (1, 224, 224), float32.
+            np.ndarray of shape (1, 128, 128), dtype float32.
         """
         with h5py.File(shard_path, "r") as f:
-            # scenes_bispectra has shape (N_scenes, N_channels, F, F)
-            # We slice out one (F, F) grid.
+            # scenes_bispectra has shape (N_scenes, N_channels, 129, 129)
             grid = f["scenes_bispectra"][scene_idx, ch_idx, :, :].astype(np.float32)
-            # grid shape: (F, F) e.g. (2049, 2049)
+            # grid shape: (129, 129)
 
-        # Add channel + batch dims for adaptive_max_pool2d: (1, 1, F, F)
-        grid_t = torch.from_numpy(grid).unsqueeze(0).unsqueeze(0)   # (1, 1, F, F)
+        # *** KEY STEP — Crop 129→28 (discard Nyquist-edge bin) ***
+        # This makes the grid exactly divisible by patch_size=16.
+        grid = grid[:self.TARGET_SIZE, :self.TARGET_SIZE]  # (128, 128)
 
-        # *** KEY STEP — Adaptive Max Pool ***
-        # Downsample from (F, F) → (224, 224) preserving highest-energy peaks.
-        # This is memory-safe and device-agnostic (runs on CPU here, before batching).
-        grid_t = F.adaptive_max_pool2d(grid_t, (self.TARGET_SIZE, self.TARGET_SIZE))
-        # grid_t shape: (1, 1, 224, 224)
-
-        # Remove the batch dim; keep the channel dim → (1, 224, 224)
-        grid_np = grid_t.squeeze(0).numpy()   # (1, 224, 224)
+        # Add the channel dimension: (128, 128) → (1, 128, 128)
+        grid = grid[np.newaxis, :, :]   # (1, 128, 128)
 
         # Normalise to zero-mean unit-variance for stable training
-        grid_np = self._normalise(grid_np)
+        grid = self._normalise(grid)
 
-        return grid_np   # float32, shape (1, 224, 224)
+        return grid   # float32, shape (1, 128, 128)
 
     def __len__(self) -> int:
         return len(self.index)
@@ -272,14 +271,14 @@ class DECDataset_Exp08(Dataset):
         (shard_path, scene_idx, ch_idx,
          reported_class, actual_class, inst_id, time_res) = self.index[idx]
 
-        # Load and downsample the bispectrum grid
+        # Load, crop (129→28), and normalise the bispectrum grid
         grid = self._read_bispectrum(shard_path, scene_idx, ch_idx)
-        # grid: np.float32, shape (1, 224, 224)
+        # grid: np.float32, shape (1, 128, 128)
 
         if self.augment:
             # SupCon Phase 1: return two independently augmented views
-            view1 = torch.from_numpy(_augment_2d(grid))  # (1, 224, 224)
-            view2 = torch.from_numpy(_augment_2d(grid))  # (1, 224, 224)
+            view1 = torch.from_numpy(_augment_2d(grid))  # (1, 128, 128)
+            view2 = torch.from_numpy(_augment_2d(grid))  # (1, 128, 128)
             return (
                 view1,
                 view2,
@@ -292,7 +291,7 @@ class DECDataset_Exp08(Dataset):
             )
         else:
             # Phase 2 / Inference: return single clean signal
-            signal = torch.from_numpy(grid)   # (1, 224, 224)
+            signal = torch.from_numpy(grid)   # (1, 128, 128)
             return (
                 signal,
                 reported_class,

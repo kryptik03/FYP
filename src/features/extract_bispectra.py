@@ -133,73 +133,49 @@ def pad_or_crop_1d(signal: np.ndarray, n_fft: int) -> np.ndarray:
 # Core: 2D Bispectrum Computation
 # ---------------------------------------------------------------------------
 
-def compute_bispectrum(signal: np.ndarray, n_fft: int) -> np.ndarray:
+def compute_bispectrum_welch(signal: np.ndarray, nperseg: int = 256, noverlap: int = 128) -> np.ndarray:
     """
-    Compute the 2D Bispectrum magnitude for a single 1D signal.
-
-    *** KEY STEP 2: Bispectrum Computation on Uniform N-point Signal ***
-
-    The bispectrum is defined as:
-        B(f1, f2) = X(f1) · X(f2) · X*(f1 + f2)
-
-    where X(f) = FFT(signal)[f], the single-sided complex spectrum.
-
-    IMPLEMENTATION NOTES
-    --------------------
-    - We use the single-sided (positive-frequency) DFT of length N=4096.
-    - The resulting full bispectrum grid has shape (N//2+1, N//2+1).
-    - We extract the positive-frequency "Non-Redundant Triangle" quadrant:
-        f1 in [0, N//2],  f2 in [0, N//2].
-    - The f1+f2 index is clamped / wrapped mod N (to stay within the
-      single-sided spectrum via the symmetry X(N-k) = X*(k) for real signals).
-
-    Args:
-        signal : 1D numpy array of exactly n_fft points (already padded/cropped).
-        n_fft  : FFT length (must equal len(signal), typically 4096).
-
-    Returns:
-        bispectrum : 2D float32 array of shape (n_fft//2+1, n_fft//2+1)
-                     containing the bispectrum magnitude |B(f1, f2)|.
-                     This is the positive-frequency quadrant only (saves space
-                     and is sufficient due to 8-fold symmetry).
+    Computes the Bispectrum using the segment-averaging method (Eq 6, 7, 8 of the paper).
     """
-    n_bins = n_fft // 2 + 1   # e.g. 2049 for n_fft=4096
-
-    # Full complex FFT, then keep only single-sided spectrum [0 .. N/2]
-    X_full = np.fft.rfft(signal, n=n_fft)  # shape: (n_bins,), dtype complex64/128
-
-    # *** KEY STEP 3: Extract Positive Frequency Quadrant ***
-    # We loop over f1, f2 in [0, n_bins) and compute |X(f1) * X(f2) * X*(f1+f2)|.
-    # Vectorised using broadcasting for speed:
-    #   - f1 indices as column vector (n_bins, 1)
-    #   - f2 indices as row vector    (1, n_bins)
-    #   - f1+f2 index clamped to [0, n_bins-1]  (beyond Nyquist: real-signal symmetry)
-
-    f1_idx = np.arange(n_bins, dtype=np.int32)   # shape (n_bins,)
-    f2_idx = np.arange(n_bins, dtype=np.int32)   # shape (n_bins,)
-
-    # f1+f2 grid; clamp at n_bins-1 (Nyquist ceiling for single-sided spectrum)
-    # For a real signal: X(N-k) = X*(k), so frequencies > Nyquist fold back.
-    f12_idx = np.clip(
-        f1_idx[:, None] + f2_idx[None, :],   # (n_bins, n_bins)
-        0, n_bins - 1
-    )
-
-    # Vectorised bispectrum magnitude
-    #   |B(f1,f2)| = |X(f1)| * |X(f2)| * |X*(f1+f2)|
-    #              = |X(f1)| * |X(f2)| * |X(f1+f2)|   (magnitude symmetric)
-    bispectrum = (
-        np.abs(X_full[f1_idx[:, None]])    # (n_bins, 1)  → broadcast to (n_bins, n_bins)
-        * np.abs(X_full[f2_idx[None, :]])  # (1, n_bins)
-        * np.abs(X_full[f12_idx])          # (n_bins, n_bins)
-    ).astype(np.float32)
-
-    return bispectrum   # shape: (n_bins, n_bins) = (2049, 2049) for n_fft=4096
+    # 1. Split signal into K overlapping segments
+    step = nperseg - noverlap
+    starts = np.arange(0, len(signal) - nperseg + 1, step)
+    
+    n_bins = nperseg // 2 + 1
+    bispectrum_avg = np.zeros((n_bins, n_bins), dtype=np.complex64)
+    
+    f1_idx = np.arange(n_bins, dtype=np.int32)
+    f2_idx = np.arange(n_bins, dtype=np.int32)
+    f12_idx = np.clip(f1_idx[:, None] + f2_idx[None, :], 0, n_bins - 1)
+    
+    # 2. Compute complex bispectrum for each segment and average (Equation 8)
+    for start in starts:
+        segment = signal[start:start+nperseg]
+        # Apply a window function (e.g., Hanning) to reduce edge leakage
+        segment = segment * np.hanning(nperseg)
+        
+        # Equation 6: FFT of the section
+        X = np.fft.rfft(segment, n=nperseg)
+        
+        # Equation 7: Complex Bispectrum of the section (X * Y * Z_conjugate)
+        B_segment = X[f1_idx[:, None]] * X[f2_idx[None, :]] * np.conj(X[f12_idx])
+        
+        bispectrum_avg += B_segment
+        
+    bispectrum_avg /= len(starts)
+    
+    # Return the magnitude of the statistically averaged complex bispectrum
+    return np.abs(bispectrum_avg).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
 # Shard Processing
 # ---------------------------------------------------------------------------
+
+# Welch segmentation parameters (fixed, matching compute_bispectrum_welch defaults)
+_NPERSEG  = 256
+_NOVERLAP = 128
+
 
 def process_shard(input_path: str, output_path: str, n_fft: int):
     """
@@ -213,11 +189,14 @@ def process_shard(input_path: str, output_path: str, n_fft: int):
 
     H5 Output Schema (bispectrum feature shards):
         scenes_bispectra : float32 (N_scenes, N_channels, F, F)
-                           where F = n_fft // 2 + 1  (e.g. 2049)
+                           where F = nperseg // 2 + 1 = 129
         labels           : copied verbatim
         attrs            : all original attrs + bispectrum metadata
     """
-    n_bins = n_fft // 2 + 1   # e.g. 2049
+    # BUG FIX: n_bins must be derived from nperseg (the Welch segment size),
+    # NOT from n_fft (the pad/crop target).  The Welch FFT is computed over
+    # 256-point segments, yielding 256//2+1 = 129 frequency bins per axis.
+    n_bins = _NPERSEG // 2 + 1   # 129, NOT n_fft//2+1 = 2049
 
     with h5py.File(input_path, "r") as h5_in:
         scenes_1d = h5_in["scenes"][:]   # (N_scenes, N_channels, T_samples)
@@ -239,7 +218,12 @@ def process_shard(input_path: str, output_path: str, n_fft: int):
                 uniform_sig = pad_or_crop_1d(raw_sig, n_fft)
 
                 # *** STEP 2: Compute 2D bispectrum magnitude ***
-                bispectrum_grid = compute_bispectrum(uniform_sig, n_fft)
+                # BUG FIX: do NOT pass n_fft as nperseg.  The function uses its
+                # own defaults (nperseg=256, noverlap=128); n_fft was only used
+                # for pad_or_crop_1d above to ensure consistent segment count.
+                bispectrum_grid = compute_bispectrum_welch(
+                    uniform_sig, nperseg=_NPERSEG, noverlap=_NOVERLAP
+                )
 
                 bispectra[s_idx, c_idx] = bispectrum_grid   # (n_bins, n_bins)
 
@@ -268,9 +252,13 @@ def process_shard(input_path: str, output_path: str, n_fft: int):
             h5_out.attrs[k] = v
 
         # Add bispectrum-specific metadata
-        h5_out.attrs["bispectrum_n_fft"]     = n_fft
-        h5_out.attrs["bispectrum_freq_bins"] = n_bins
-        h5_out.attrs["feature_type"]         = "bispectra_magnitude"
+        # BUG FIX: record all Welch parameters, not just n_fft.
+        # 'bispectrum_padded_len' replaces the old 'bispectrum_n_fft' key.
+        h5_out.attrs["bispectrum_padded_len"]  = n_fft        # pad/crop target (4096)
+        h5_out.attrs["bispectrum_nperseg"]     = _NPERSEG     # Welch segment size (256)
+        h5_out.attrs["bispectrum_noverlap"]    = _NOVERLAP    # Welch overlap (128)
+        h5_out.attrs["bispectrum_freq_bins"]   = n_bins       # bins per axis (129)
+        h5_out.attrs["feature_type"]           = "bispectra_magnitude"
 
     out_mb = os.path.getsize(output_path) / (1024 ** 2)
     print(f"    Output: {output_path}  ({out_mb:.1f} MB)")

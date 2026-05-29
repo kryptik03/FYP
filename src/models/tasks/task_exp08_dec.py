@@ -6,7 +6,7 @@ Two-Phase Semi-Supervised Spherical Deep Embedded Clustering (DEC) Task — Exp0
 ARCHITECTURE CHANGE vs Exp07
 -----------------------------
 The backbone is replaced from `DECCNN2D_Exp07` (lightweight 2D CNN)
-to `DECViT_Exp08` (Vision Transformer with 1→3 channel adapter + projector).
+to `DECViT_Exp08` (custom mini-ViT for 128×128 bispectrum images).
 
 All other logic is IDENTICAL to Exp07:
   - Phase 1  : Supervised Contrastive Learning (SupCon) on augmented pairs.
@@ -46,10 +46,13 @@ class SupConDECTask_Exp08(nn.Module):
 
     Config keys read from `config`:
       model.in_channels        : always 1 (bispectrum)
-      model.embedding_dim      : 128
+      model.image_size         : 128 (after 129→128 crop in the dataset)
+      model.patch_size         : 16  (gives 8×8=64 patches per image)
+      model.d_model            : 384 (transformer hidden dim, ViT-Small)
+      model.nhead              : 6   (attention heads)
+      model.depth              : 6   (number of transformer blocks)
+      model.embedding_dim      : 128 (L2-normalised output dim)
       model.n_clusters         : number of PD classes to discover
-      model.vit_variant        : "vit_b_16" or "vit_b_32"
-      model.pretrained         : bool (default True)
       task.simclr_temperature  : SupCon temperature τ (default 0.5)
       task.pairwise_weight_gamma: weight for pairwise loss in Phase 2
     """
@@ -69,10 +72,13 @@ class SupConDECTask_Exp08(nn.Module):
         # ViT Backbone (replaces the CNN of Exp07)                            #
         # ------------------------------------------------------------------ #
         self.backbone = DECViT_Exp08(
-            in_channels   = model_cfg.get("in_channels", 1),
+            in_channels   = model_cfg.get("in_channels",   1),
+            image_size    = model_cfg.get("image_size",    128),
+            patch_size    = model_cfg.get("patch_size",    16),
+            d_model       = model_cfg.get("d_model",       384),
+            nhead         = model_cfg.get("nhead",         6),
+            depth         = model_cfg.get("depth",         6),
             embedding_dim = self.embedding_dim,
-            vit_variant   = model_cfg.get("vit_variant", "vit_b_16"),
-            pretrained    = model_cfg.get("pretrained", True),
         )
 
         # ------------------------------------------------------------------ #
@@ -171,13 +177,13 @@ class SupConDECTask_Exp08(nn.Module):
 
         Args:
             batch : (view1, view2, reported_class, ...)
-                    view1/view2 have shape (B, 1, 224, 224).
+                    view1/view2 have shape (B, 1, 128, 128).
 
         Returns:
             (z1, loss_dict)  where loss_dict = {"total": ..., "supcon": ...}
         """
-        view1          = batch[0]   # (B, 1, 224, 224)
-        view2          = batch[1]   # (B, 1, 224, 224)
+        view1          = batch[0]   # (B, 1, 128, 128)
+        view2          = batch[1]   # (B, 1, 128, 128)
         reported_class = batch[2]   # (B,)
 
         self._optimizer.zero_grad()
@@ -270,12 +276,12 @@ class SupConDECTask_Exp08(nn.Module):
 
         Args:
             batch : (signal, reported_class)
-                    signal has shape (B, 1, 224, 224).
+                    signal has shape (B, 1, 128, 128).
 
         Returns:
             (q, loss_dict)  where loss_dict = {"total":..., "kl_div":..., "pairwise":...}
         """
-        signal         = batch[0]   # (B, 1, 224, 224)
+        signal         = batch[0]   # (B, 1, 128, 128)
         reported_class = batch[1]   # (B,)
 
         self._optimizer.zero_grad()

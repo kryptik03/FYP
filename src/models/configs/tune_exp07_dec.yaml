@@ -45,7 +45,7 @@ task:
   simclr_temperature: 0.5
   dec_update_interval: 140
   dec_tol: 0.001
-  pairwise_weight_gamma: 0.102946  # Tuned by Optuna (was 1.0)
+  pairwise_weight_gamma: 0.10188584098955146  # Tuned by Optuna (was 1.0)
 
 training:
   device: "auto"
@@ -53,11 +53,11 @@ training:
   phase1_epochs: 10
   phase2_epochs: 10
   epochs: 20
-  learning_rate_phase1: 0.0017278846 # Tuned by Optuna (was 0.001)
-  learning_rate_phase2: 0.0079887691 # Tuned by Optuna (was 0.0001)
-  tuned_at: "20260527_204313"
-  tuning_node_id: "KGWW"
-  tuning_val_loss: 0.22041996 # not recorded for this run
+  learning_rate_phase1: 0.000013375889821619214 # Tuned by Optuna (was 0.001)
+  learning_rate_phase2: 0.009249310708245284 # Tuned by Optuna (was 0.0001)
+  tuned_at: "20260529_165000"
+  tuning_node_id: "kEla"
+  tuning_val_loss: 0.22434517989555994
 
 output:
   weights_dir: "models/weights"
