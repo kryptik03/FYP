@@ -1,0 +1,79 @@
+# =============================================================================
+# Experiment Configuration: exp08_dec
+# Model  : Vision Transformer (ViT-B/16) Backbone + SupCon & Semi-Supervised DEC
+# Input  : 2D Bispectrum Magnitude Grids (pre-computed, 224×224 after AdaptiveMaxPool)
+# Task   : Phase 1 = SupCon Self-Supervised Pre-Training (bispectrum augmentation)
+#          Phase 2 = DEC Unsupervised Cluster Refinement + Pairwise Constraints
+#
+# IMPORTANT — Before running train_exp08.py, you MUST first extract bispectra:
+#   python src/features/extract_bispectra.py \
+#       --input_dir data/raw/cwru/<folder> --parent_node_id <ID>
+#   (repeat for all 4 dataset sources)
+#   Then update the `path` fields below to point to the bispectra output dirs.
+# =============================================================================
+
+experiment:
+  name: "exp08_supcon_dec_vit_bispectrum"
+  description: "ViT-B/16 + SupCon & Semi-Supervised DEC on 2D Bispectrum features.
+    Synthesised, Measured (Void) & Eqn datasets. AdaptiveMaxPool to 224x224."
+  parent_node_id: "REPLACE_WITH_BISPECTRUM_EXTRACTION_NODE_ID"
+  task_type: "supcon_dec_semi_vit_bispectrum"
+
+data:
+  sources:
+  - type: "cwru"
+    path: "data/features/bispectra/REPLACE_WITH_CWRU_BISPECTRUM_DIR"
+    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    val_shards: [14, 15, 16]
+  - type: "equation"
+    path: "data/features/bispectra/REPLACE_WITH_EQN_BISPECTRUM_DIR"
+    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    val_shards: [17, 18, 19, 20]
+  - type: "synthesised"
+    path: "data/features/bispectra/REPLACE_WITH_SYN_BISPECTRUM_DIR"
+    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    val_shards: [17, 18, 19, 20]
+  - type: "measured"
+    path: "data/features/bispectra/REPLACE_WITH_MS_BISPECTRUM_DIR"
+    train_shards: [1, 2, 3]
+    val_shards: [4, 5]
+  max_pulse_len: 4096     # Reference only (not used for time-slicing in Exp08)
+  label_fraction: 0.10    # 10% labels exposed for Semi-Supervised pairwise constraints
+  augment: true
+
+model:
+  in_channels: 1          # Single-channel bispectra (1→3 adapter inside the backbone)
+  vit_variant: "vit_b_16" # Options: "vit_b_16" (recommended) or "vit_b_32"
+  pretrained: true        # Load ImageNet-21k pretrained weights for the ViT transformer blocks
+  embedding_dim: 128      # L2-normalised output dimension (unit hypersphere)
+  n_clusters: 10          # Number of PD classes to cluster
+
+task:
+  simclr_temperature: 0.5        # SupCon temperature τ
+  dec_update_interval: 140       # Target-distribution update frequency (batches)
+  dec_tol: 0.001                 # DEC convergence tolerance
+  pairwise_weight_gamma: 1.0     # Weight for pairwise must-link/cannot-link loss
+
+training:
+  device: "auto"          # "auto" → CUDA if available, else CPU
+  batch_size: 32          # Smaller than Exp07 (ViT uses more VRAM per sample)
+  phase1_epochs: 10       # Default Phase 1 epochs (overridable interactively at runtime)
+  phase2_epochs: 10       # Default Phase 2 epochs (overridable interactively at runtime)
+  epochs: 20              # Total (kept for config compatibility)
+  learning_rate_phase1: 0.0001   # Will be tuned by tune_exp08.py
+  learning_rate_phase2: 0.00001  # Will be tuned by tune_exp08.py
+
+output:
+  weights_dir: "models/weights"
+  config_snapshot_dir: "models/configuration_snapshots"
+  results_dir: "data/classification_output/exp08_supcon_dec_vit"
+  eval_dir: "data/performance_evaluation/classification/exp08_supcon_dec_vit"
+
+tune:
+  n_trials: 15
+  # NOTE: base_channels is NOT a ViT hyperparameter. The ViT model architecture
+  # is fixed. Tunable params for Exp08:
+  search_space:
+    learning_rate_phase1: [1.0e-5, 1.0e-3]   # Log-uniform search
+    learning_rate_phase2: [1.0e-5, 1.0e-3]   # Log-uniform search
+    pairwise_weight_gamma: [0.1, 10.0]         # Log-uniform search
