@@ -45,7 +45,7 @@ task:
   simclr_temperature: 0.5
   dec_update_interval: 140
   dec_tol: 0.001
-  pairwise_weight_gamma: 0.10188584098955146  # Tuned by Optuna (was 1.0)
+  pairwise_weight_gamma: 1.0
 
 training:
   device: "auto"
@@ -68,7 +68,6 @@ output:
 tune:
   n_trials: 15
   search_space:
-    learning_rate_phase1: [1e-5, 1e-2]
-    learning_rate_phase2: [1e-5, 1e-2]
-    pairwise_weight_gamma: [0.1, 10.0]
+    learning_rate_phase1: [1e-5, 1e-3]
+    learning_rate_phase2: [1e-6, 5e-4]
     base_channels: [16, 32, 64]

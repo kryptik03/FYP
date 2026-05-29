@@ -15,26 +15,26 @@
 experiment:
   name: "exp08_supcon_dec_vit_bispectrum"
   description: "ViT-B/16 + SupCon & Semi-Supervised DEC on 2D Bispectrum features.
-    Synthesised, Measured (Void) & Eqn datasets. AdaptiveMaxPool to 224x224."
-  parent_node_id: "REPLACE_WITH_BISPECTRUM_EXTRACTION_NODE_ID"
+    CWRU, Synthesised, Measured (Void) & Eqn datasets. AdaptiveMaxPool to 224x224."
+  parent_node_id: "d46M"
   task_type: "supcon_dec_semi_vit_bispectrum"
 
 data:
   sources:
   - type: "cwru"
-    path: "data/features/bispectra/REPLACE_WITH_CWRU_BISPECTRUM_DIR"
+    path: "data/features/bispectra/20260529_203700-cw-TuKT-pIzo"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     val_shards: [14, 15, 16]
   - type: "equation"
-    path: "data/features/bispectra/REPLACE_WITH_EQN_BISPECTRUM_DIR"
+    path: "data/features/bispectra/20260529_202949-sy-0s6o-9xdr"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     val_shards: [17, 18, 19, 20]
   - type: "synthesised"
-    path: "data/features/bispectra/REPLACE_WITH_SYN_BISPECTRUM_DIR"
+    path: "data/features/bispectra/20260529_204239-sy-1yGk-d46M"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     val_shards: [17, 18, 19, 20]
   - type: "measured"
-    path: "data/features/bispectra/REPLACE_WITH_MS_BISPECTRUM_DIR"
+    path: "data/features/bispectra/20260529_202839-ms-nQgf-pcZn"
     train_shards: [1, 2, 3]
     val_shards: [4, 5]
   max_pulse_len: 4096     # Reference only (not used for time-slicing in Exp08)
@@ -60,9 +60,9 @@ task:
 training:
   device: "auto"          # "auto" → CUDA if available, else CPU
   batch_size: 32          # Smaller than Exp07 (ViT uses more VRAM per sample)
-  phase1_epochs: 10       # Default Phase 1 epochs (overridable interactively at runtime)
+  phase1_epochs: 15       # Default Phase 1 epochs (overridable interactively at runtime)
   phase2_epochs: 10       # Default Phase 2 epochs (overridable interactively at runtime)
-  epochs: 20              # Total (kept for config compatibility)
+  epochs: 25              # Total (kept for config compatibility)
   learning_rate_phase1: 0.0001   # Will be tuned by tune_exp08.py
   learning_rate_phase2: 0.00001  # Will be tuned by tune_exp08.py
 
@@ -79,4 +79,3 @@ tune:
   search_space:
     learning_rate_phase1: [1.0e-5, 1.0e-3]   # Log-uniform search
     learning_rate_phase2: [1.0e-5, 1.0e-3]   # Log-uniform search
-    pairwise_weight_gamma: [0.1, 10.0]         # Log-uniform search
