@@ -20,6 +20,28 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 from src.models.data.dataset_exp07_dec import DECDataset_Exp07
 from src.models.tasks.task_exp07_dec import SupConDECTask
 
+def subset_dataset_evenly(dataset, max_per_source=200):
+    from collections import defaultdict
+    import numpy as np
+    import torch
+    
+    source_to_indices = defaultdict(list)
+    for i, item in enumerate(dataset.index):
+        # item[0] is shard_path. Use its dirname to identify the dataset source.
+        source_dir = os.path.dirname(item[0])
+        source_to_indices[source_dir].append(i)
+        
+    selected_indices = []
+    for source, indices in source_to_indices.items():
+        if len(indices) > max_per_source:
+            sampled = np.random.choice(indices, max_per_source, replace=False)
+            selected_indices.extend(sampled.tolist())
+        else:
+            selected_indices.extend(indices)
+            
+    return torch.utils.data.Subset(dataset, selected_indices)
+
+
 def build_loaders(cfg: dict):
     # Train loader for Phase 1 (augmented)
     train_dataset_p1 = DECDataset_Exp07(
@@ -29,6 +51,7 @@ def build_loaders(cfg: dict):
         augment=True, # Always augment for Phase 1 SupCon
         label_fraction=cfg["data"].get("label_fraction", 0.10)
     )
+    train_dataset_p1 = subset_dataset_evenly(train_dataset_p1, max_per_source=300)
     train_loader_p1 = DataLoader(
         train_dataset_p1,
         batch_size=cfg["training"]["batch_size"],
@@ -44,6 +67,7 @@ def build_loaders(cfg: dict):
         augment=False,
         label_fraction=cfg["data"].get("label_fraction", 0.10)
     )
+    train_dataset_p2 = subset_dataset_evenly(train_dataset_p2, max_per_source=300)
     train_loader_p2 = DataLoader(
         train_dataset_p2,
         batch_size=cfg["training"]["batch_size"],
@@ -60,6 +84,7 @@ def build_loaders(cfg: dict):
         augment=True,
         label_fraction=cfg["data"].get("label_fraction", 0.10)
     )
+    val_dataset_p1 = subset_dataset_evenly(val_dataset_p1, max_per_source=100)
     val_loader_p1 = DataLoader(
         val_dataset_p1,
         batch_size=cfg["training"]["batch_size"],
@@ -74,6 +99,7 @@ def build_loaders(cfg: dict):
         augment=False,
         label_fraction=cfg["data"].get("label_fraction", 0.10)
     )
+    val_dataset_p2 = subset_dataset_evenly(val_dataset_p2, max_per_source=100)
     val_loader_p2 = DataLoader(
         val_dataset_p2,
         batch_size=cfg["training"]["batch_size"],
@@ -124,7 +150,8 @@ def objective(trial, base_config: dict):
 
     # 4. Phase 1: SupCon
     task.set_phase(1, lr=cfg["training"]["learning_rate_phase1"])
-    for epoch in range(cfg["training"]["phase1_epochs"]):
+    tune_epochs_p1 = min(3, cfg["training"].get("phase1_epochs", 3))
+    for epoch in range(tune_epochs_p1):
         task.train()
         for batch in train_loader_p1:
             # augment=True → (view1, view2, reported_class, inst_id, shard_path, start_idx, time_res, actual_class)
@@ -152,7 +179,8 @@ def objective(trial, base_config: dict):
     
     best_val_loss = float('inf')
     
-    for epoch in range(cfg["training"]["phase2_epochs"]):
+    tune_epochs_p2 = min(3, cfg["training"].get("phase2_epochs", 3))
+    for epoch in range(tune_epochs_p2):
         task.train()
         for batch in train_loader_p2:
             # augment=False → (signal, reported_class, ...)

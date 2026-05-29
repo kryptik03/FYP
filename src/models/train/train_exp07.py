@@ -345,8 +345,8 @@ def main():
     train_start   = time.time()
     start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    phase1_epochs = train_cfg.get("phase1_epochs", 10)
-    phase2_epochs = train_cfg.get("phase2_epochs", 10)
+    phase1_epochs = 150
+    phase2_epochs = 150
     lr1 = train_cfg.get("learning_rate_phase1", 0.001)
     lr2 = train_cfg.get("learning_rate_phase2", 0.0001)
 
