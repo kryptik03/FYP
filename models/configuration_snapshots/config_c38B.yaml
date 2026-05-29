@@ -1,0 +1,74 @@
+# =============================================================================
+# Experiment Configuration: exp07_dec_tune
+# Model  : 2D CNN Backbone + SupCon & Semi-Supervised Deep Embedded Clustering (DEC)
+# Input  : 2D STFT Magnitude Spectrograms
+# Task   : Phase 1 = SupCon Self-Supervised Pre-Training
+#          Phase 2 = DEC Unsupervised Cluster Refinement + Pairwise Constraints
+# =============================================================================
+
+experiment:
+  name: "exp07_supcon_dec"
+  description: "SupCon & Semi-Supervised DEC on STFT features. Synthesised,
+    Measured (Void) & Eqn datasets."
+  parent_node_id: "N5ZR"   # Set to the node_id of your extracted STFT features
+  task_type: "supcon_dec_semi"
+
+data:
+  sources:
+  - type: "cwru"
+    path: "data/features/stft_magnitude/20260524_234212-cw-TuKT-vraW"   # Set to extracted STFT dir
+    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    val_shards: [14, 15, 16]
+  - type: "equation"
+    path: "data/features/stft_magnitude/20260524_234301-sy-0s6o-UI2r"   # Set to extracted STFT dir
+    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    val_shards: [17, 18, 19, 20]
+  - type: "synthesised"
+    path: "data/features/stft_magnitude/20260524_234445-sy-1yGk-N5ZR"   # Set to extracted STFT dir
+    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    val_shards: [17, 18, 19, 20]
+  - type: "measured"
+    path: "data/features/stft_magnitude/20260527_205109-ms-nQgf-LTaf"   # Set to extracted STFT dir
+    train_shards: [1, 2, 3]
+    val_shards: [4, 5]
+  max_pulse_len: 4096
+  label_fraction: 0.10   # 10% labels unmasked for Semi-Supervised pairwise constraints
+  augment: true
+
+model:
+  in_channels: 1
+  base_channels: 64        # Tuned by Optuna (was 16)
+  embedding_dim: 128
+  n_clusters: 10
+
+task:
+  simclr_temperature: 0.5
+  dec_update_interval: 140
+  dec_tol: 0.001
+  pairwise_weight_gamma: 0.10188584098955146  # Tuned by Optuna (was 1.0)
+
+training:
+  device: "auto"
+  batch_size: 64
+  phase1_epochs: 10
+  phase2_epochs: 10
+  epochs: 20
+  learning_rate_phase1: 0.000013375889821619214 # Tuned by Optuna (was 0.001)
+  learning_rate_phase2: 0.009249310708245284 # Tuned by Optuna (was 0.0001)
+  tuned_at: "20260529_165000"
+  tuning_node_id: "kEla"
+  tuning_val_loss: 0.22434517989555994
+
+output:
+  weights_dir: "models/weights"
+  config_snapshot_dir: "models/configuration_snapshots"
+  results_dir: "data/classification_output/exp07_supcon_dec"
+  eval_dir: "data/performance_evaluation/classification/exp07_supcon_dec"
+
+tune:
+  n_trials: 15
+  search_space:
+    learning_rate_phase1: [1e-5, 1e-2]
+    learning_rate_phase2: [1e-5, 1e-2]
+    pairwise_weight_gamma: [0.1, 10.0]
+    base_channels: [16, 32, 64]
