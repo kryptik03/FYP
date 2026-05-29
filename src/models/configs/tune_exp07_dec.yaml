@@ -15,10 +15,10 @@ experiment:
 
 data:
   sources:
-#  - type: "cwru"
-#    path: "data/features/stft_magnitude/20260524_234212-cw-TuKT-vraW"   # Set to extracted STFT dir
-#    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
-#    val_shards: [14, 15, 16]
+  - type: "cwru"
+    path: "data/features/stft_magnitude/20260524_234212-cw-TuKT-vraW"   # Set to extracted STFT dir
+    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    val_shards: [14, 15, 16]
   - type: "equation"
     path: "data/features/stft_magnitude/20260524_234301-sy-0s6o-UI2r"   # Set to extracted STFT dir
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]

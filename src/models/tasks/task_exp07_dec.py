@@ -194,7 +194,6 @@ class SupConDECTask(nn.Module):
     # ======================================================================= #
 
     def validation_step(self, batch: tuple) -> dict:
-        self.eval()
         with torch.no_grad():
             if self._phase == 1:
                 view1, view2, reported_class = batch[0], batch[1], batch[2]
@@ -212,7 +211,6 @@ class SupConDECTask(nn.Module):
                 loss_pw = self._pairwise_constraint_loss(q, reported_class)
                 loss = loss_kl + self.pairwise_weight_gamma * loss_pw
                 result = {"total": loss.item(), "kl_div": loss_kl.item(), "pairwise": loss_pw.item()}
-        self.train()
         return result
 
     # ======================================================================= #
