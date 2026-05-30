@@ -1,8 +1,25 @@
 """
 extract_bispectra.py
 ==========================
-Standalone preprocessing script: read raw 1D UHF signal shards and compute
-2D Bispectrum magnitude grids, saving them as new feature shards.
+Standalone preprocessing script: read raw 1D UHF signal shards, isolate each
+individual PD pulse using the labels array, compute a 2D Bispectrum magnitude
+grid for each pulse, and save the results as new feature shards.
+
+WHY PER-PULSE (not per-scene)?
+-------------------------------
+A raw "scene" is a long continuous recording (e.g. 50,001 samples ≈ 10 µs at
+5 GHz). Each scene contains multiple sparse PD pulses buried in noise. The
+Bispectrum destroys the time axis — unlike the STFT, you cannot compute it
+over the whole scene and "slice out" the pulse afterwards.
+
+If you compute the Bispectrum over the entire scene:
+  1. Welch's averaging dilutes the PD phase-coupling signature over hundreds
+     of noise-only segments, washing it out entirely.
+  2. The pad/crop step (signal → 4096 pts) discards everything after the first
+     4,096 samples, potentially missing the pulse completely.
+
+The correct approach: use `labels[start_idx : end_idx]` to extract each
+isolated pulse waveform FIRST, then compute its Bispectrum.
 
 WHY BISPECTRA?
 --------------
@@ -12,47 +29,48 @@ pairs that is completely invisible to the power spectrum (STFT). This makes
 it ideal for distinguishing Partial Discharge (PD) types whose spectral
 envelopes overlap but whose phase relationships differ.
 
-STRATEGY — "Pad/Crop + Extract Positive Quadrant"
---------------------------------------------------
-1.  Force every raw 1D signal to exactly N=4096 points.
-    - Shorter signals are ZERO-PADDED at the end.
-    - Longer signals are TRUNCATED (first 4096 points kept).
-    This ensures strict frequency-bin alignment across all 4 datasets.
+STRATEGY — Pulse-level Pad/Crop + Welch Bispectrum
+----------------------------------------------------
+1.  Read the `labels` array (7, N_pulses) from the raw shard.
+    Each column is one (scene, channel, class, pulse_id, toa, start, end) entry.
 
-2.  Compute the 2D Bispectrum magnitude via direct FFT:
-    B(f1, f2) = X(f1) * X(f2) * conj(X(f1+f2))
-    The full grid is (N//2+1) x (N//2+1) = 2049 x 2049.
+2.  For each pulse k, slice the raw scene signal:
+        raw_pulse = scenes[scene_idx, ch_idx, start_idx : end_idx + 1]
+    This gives the isolated PD waveform (typically 200–1000 samples).
 
-3.  Extract only the Non-Redundant Triangle (NRT) — the positive
-    first-quadrant region where f1 >= 0 and f2 >= 0. The full bispectrum
-    has 8-fold symmetry; the NRT alone is sufficient.
-    Output shape per pulse: (N//2+1, N//2+1) = (2049, 2049) as float32.
+3.  Force every isolated pulse to exactly N=`n_fft` points via pad/crop.
+    Shorter pulses are zero-padded; longer are truncated.
+
+4.  Compute the 2D Bispectrum magnitude via Welch's segment-averaging method:
+        B(f1, f2) = mean_k [ X_k(f1) · X_k(f2) · conj(X_k(f1+f2)) ]
+    with nperseg=256, noverlap=128, giving 129 frequency bins per axis.
 
 OUTPUT H5 SCHEMA
 ----------------
-Each output shard mirrors the input but replaces `scenes` with:
-  scenes_bispectra : float32 array (N_scenes, N_channels, F, F)
-                     where F = n_fft // 2 + 1 (e.g. 2049 for N=4096)
+Each output shard mirrors the input but REPLACES `scenes` with:
+  pulses_bispectra : float32 array (N_pulses, F, F)
+                     where F = nperseg // 2 + 1 = 129
+                     Row k corresponds exactly to column k of `labels`.
   labels           : copied verbatim from the input shard
   root attrs       : copied verbatim
   bispectra-specific attrs added:
-    bispectrum_n_fft    : int (4096)
-    bispectrum_freq_bins: int (2049)
-    feature_type        : "bispectra_magnitude"
+    bispectrum_padded_len : int (n_fft, e.g. 4096)
+    bispectrum_nperseg    : int (256)
+    bispectrum_noverlap   : int (128)
+    bispectrum_freq_bins  : int (129)
+    feature_type          : "bispectra_magnitude_per_pulse"
 
 USAGE
 -----
     python src/features/extract_bispectra.py \\
-        --input_dir  data/raw/cwru/20260524_233633_cw-TuKT-TuKT \\
-        --output_root data/features \\
-        --parent_node_id TuKT
-
-    # Optional: override the forced signal length (default 4096)
-    python src/features/extract_bispectra.py \\
         --input_dir  data/raw/synthesised/... \\
-        --output_root data/features \\
-        --parent_node_id N5ZR \\
-        --n_fft 4096
+        --parent_node_id 1yGk
+
+    # Optional: override the forced pulse length (default 4096)
+    python src/features/extract_bispectra.py \\
+        --input_dir  data/raw/cwru/... \\
+        --parent_node_id TuKT \\
+        --n_fft 2048
 """
 
 import argparse
@@ -83,6 +101,18 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Label row indices (same schema across all Exp datasets)
+# ---------------------------------------------------------------------------
+ROW_SCENE_ID   = 0
+ROW_CHANNEL_ID = 1
+ROW_CLASS_ID   = 2
+ROW_PULSE_ID   = 3
+ROW_TOA_IDX    = 4
+ROW_START_IDX  = 5
+ROW_END_IDX    = 6
+
+
+# ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
 
@@ -98,16 +128,16 @@ def generate_short_id(length: int = 4) -> str:
 
 def pad_or_crop_1d(signal: np.ndarray, n_fft: int) -> np.ndarray:
     """
-    *** KEY STEP 1: Uniform Signal Length ***
+    *** KEY STEP 1: Uniform Pulse Length ***
 
-    Forces the raw 1D signal to exactly `n_fft` points so that every bispectrum
-    has identical frequency-bin spacing and alignment.
+    Forces the raw 1D pulse waveform to exactly `n_fft` points so that every
+    bispectrum has identical frequency-bin spacing and alignment.
 
     - If len(signal) < n_fft  → zero-pad at the END (causal padding).
     - If len(signal) > n_fft  → keep only the FIRST n_fft samples (truncate).
 
     Args:
-        signal : 1D numpy array of arbitrary length.
+        signal : 1D numpy array of arbitrary length (the isolated pulse).
         n_fft  : Target length (default 4096).
 
     Returns:
@@ -117,148 +147,147 @@ def pad_or_crop_1d(signal: np.ndarray, n_fft: int) -> np.ndarray:
     L = len(signal)
 
     if L == n_fft:
-        return signal                                       # Already correct — nothing to do
+        return signal                                       # Already correct
 
     if L < n_fft:
-        # Zero-pad at the end  ← "PAD" branch
         padded = np.zeros(n_fft, dtype=np.float32)
         padded[:L] = signal
         return padded
 
-    # L > n_fft  → truncate  ← "CROP" branch
+    # L > n_fft → truncate
     return signal[:n_fft]
 
 
 # ---------------------------------------------------------------------------
-# Core: 2D Bispectrum Computation
+# Core: 2D Bispectrum Computation (Welch segment-averaging method)
 # ---------------------------------------------------------------------------
 
-def compute_bispectrum_welch(signal: np.ndarray, nperseg: int = 256, noverlap: int = 128) -> np.ndarray:
-    """
-    Computes the Bispectrum using the segment-averaging method (Eq 6, 7, 8 of the paper).
-    """
-    # 1. Split signal into K overlapping segments
-    step = nperseg - noverlap
-    starts = np.arange(0, len(signal) - nperseg + 1, step)
-    
-    n_bins = nperseg // 2 + 1
-    bispectrum_avg = np.zeros((n_bins, n_bins), dtype=np.complex64)
-    
-    f1_idx = np.arange(n_bins, dtype=np.int32)
-    f2_idx = np.arange(n_bins, dtype=np.int32)
-    f12_idx = np.clip(f1_idx[:, None] + f2_idx[None, :], 0, n_bins - 1)
-    
-    # 2. Compute complex bispectrum for each segment and average (Equation 8)
-    for start in starts:
-        segment = signal[start:start+nperseg]
-        # Apply a window function (e.g., Hanning) to reduce edge leakage
-        segment = segment * np.hanning(nperseg)
-        
-        # Equation 6: FFT of the section
-        X = np.fft.rfft(segment, n=nperseg)
-        
-        # Equation 7: Complex Bispectrum of the section (X * Y * Z_conjugate)
-        B_segment = X[f1_idx[:, None]] * X[f2_idx[None, :]] * np.conj(X[f12_idx])
-        
-        bispectrum_avg += B_segment
-        
-    bispectrum_avg /= len(starts)
-    
-    # Return the magnitude of the statistically averaged complex bispectrum
-    return np.abs(bispectrum_avg).astype(np.float32)
-
-
-# ---------------------------------------------------------------------------
-# Shard Processing
-# ---------------------------------------------------------------------------
-
-# Welch segmentation parameters (fixed, matching compute_bispectrum_welch defaults)
+# Welch segmentation parameters (fixed to give 129 frequency bins per axis)
 _NPERSEG  = 256
 _NOVERLAP = 128
 
 
+def compute_bispectrum_welch(signal: np.ndarray, nperseg: int = 256, noverlap: int = 128) -> np.ndarray:
+    """
+    Computes the Bispectrum magnitude using the segment-averaging (Welch) method.
+
+    B(f1, f2) = (1/K) * sum_k [ X_k(f1) · X_k(f2) · conj(X_k(f1+f2)) ]
+
+    Args:
+        signal   : 1D float32 array of fixed length (n_fft points after pad/crop).
+        nperseg  : Welch segment length (default 256 → 129 freq bins).
+        noverlap : Overlap between consecutive segments (default 128).
+
+    Returns:
+        2D float32 array of shape (nperseg//2+1, nperseg//2+1) = (129, 129).
+    """
+    step   = nperseg - noverlap
+    starts = np.arange(0, len(signal) - nperseg + 1, step)
+
+    n_bins = nperseg // 2 + 1    # 129
+    bispectrum_avg = np.zeros((n_bins, n_bins), dtype=np.complex64)
+
+    f1_idx  = np.arange(n_bins, dtype=np.int32)
+    f2_idx  = np.arange(n_bins, dtype=np.int32)
+    f12_idx = np.clip(f1_idx[:, None] + f2_idx[None, :], 0, n_bins - 1)
+
+    for start in starts:
+        segment = signal[start : start + nperseg] * np.hanning(nperseg)
+        X       = np.fft.rfft(segment, n=nperseg)
+        bispectrum_avg += X[f1_idx[:, None]] * X[f2_idx[None, :]] * np.conj(X[f12_idx])
+
+    bispectrum_avg /= max(len(starts), 1)
+    return np.abs(bispectrum_avg).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Shard Processing  ← CORE FIX: iterate over pulses, not scenes
+# ---------------------------------------------------------------------------
+
 def process_shard(input_path: str, output_path: str, n_fft: int):
     """
-    Read one raw 1D shard, compute bispectra for every (scene, channel) pair,
-    and write the result to a new output shard.
+    Read one raw 1D shard, compute a Bispectrum for every individual PD pulse
+    (indexed by the labels array), and write the result to a new output shard.
 
     H5 Input Schema (raw shards):
-        scenes      : float32 (N_scenes, N_channels, T_samples)   ← variable T_samples
-        labels      : int/float (7, N_pulses)
+        scenes      : float32  (N_scenes, N_channels, T_samples)
+        labels      : float/int (7, N_pulses)  — row indices defined at top of file
         attrs       : sampling_frequency_Hz, time_resolution_s, ...
 
     H5 Output Schema (bispectrum feature shards):
-        scenes_bispectra : float32 (N_scenes, N_channels, F, F)
-                           where F = nperseg // 2 + 1 = 129
-        labels           : copied verbatim
+        pulses_bispectra : float32 (N_pulses, F, F)
+                           Row k = bispectrum of the pulse described by labels[:, k].
+                           F = _NPERSEG // 2 + 1 = 129.
+        labels           : copied verbatim (column k still matches row k of bispectra)
         attrs            : all original attrs + bispectrum metadata
     """
-    # BUG FIX: n_bins must be derived from nperseg (the Welch segment size),
-    # NOT from n_fft (the pad/crop target).  The Welch FFT is computed over
-    # 256-point segments, yielding 256//2+1 = 129 frequency bins per axis.
-    n_bins = _NPERSEG // 2 + 1   # 129, NOT n_fft//2+1 = 2049
+    n_bins = _NPERSEG // 2 + 1   # 129
 
     with h5py.File(input_path, "r") as h5_in:
+        if "scenes" not in h5_in or "labels" not in h5_in:
+            print(f"    [Skip] Missing 'scenes' or 'labels' dataset in {input_path}")
+            return
+
         scenes_1d = h5_in["scenes"][:]   # (N_scenes, N_channels, T_samples)
+        labels    = h5_in["labels"][:]   # (7, N_pulses)
+
         N_scenes, N_channels, T_samples = scenes_1d.shape
+        N_pulses = labels.shape[1]
 
-        print(f"    Input: {N_scenes} scenes × {N_channels} ch × {T_samples} samples")
+        print(f"    Input:  {N_scenes} scenes × {N_channels} ch × {T_samples} samples, "
+              f"{N_pulses} pulses")
 
-        # Allocate output array upfront (much faster than incremental append)
-        # Shape: (N_scenes, N_channels, n_bins, n_bins)
-        bispectra = np.zeros(
-            (N_scenes, N_channels, n_bins, n_bins), dtype=np.float32
+        # Allocate output: one bispectrum per pulse entry in the labels table
+        pulses_bispectra = np.zeros(
+            (N_pulses, n_bins, n_bins), dtype=np.float32
         )
 
-        for s_idx in range(N_scenes):
-            for c_idx in range(N_channels):
-                raw_sig = scenes_1d[s_idx, c_idx, :]    # shape: (T_samples,)
+        for k in range(N_pulses):
+            scene_idx = int(labels[ROW_SCENE_ID,   k])
+            ch_idx    = int(labels[ROW_CHANNEL_ID, k])
+            start_idx = int(labels[ROW_START_IDX,  k])
+            end_idx   = int(labels[ROW_END_IDX,    k])
 
-                # *** STEP 1: Pad or crop to exactly n_fft points ***
-                uniform_sig = pad_or_crop_1d(raw_sig, n_fft)
+            # *** KEY FIX: Slice out the isolated PD pulse waveform ***
+            raw_pulse = scenes_1d[scene_idx, ch_idx, start_idx : end_idx + 1]
 
-                # *** STEP 2: Compute 2D bispectrum magnitude ***
-                # BUG FIX: do NOT pass n_fft as nperseg.  The function uses its
-                # own defaults (nperseg=256, noverlap=128); n_fft was only used
-                # for pad_or_crop_1d above to ensure consistent segment count.
-                bispectrum_grid = compute_bispectrum_welch(
-                    uniform_sig, nperseg=_NPERSEG, noverlap=_NOVERLAP
-                )
+            # Uniform length via pad/crop (ensures consistent Welch segment count)
+            uniform_pulse = pad_or_crop_1d(raw_pulse, n_fft)
 
-                bispectra[s_idx, c_idx] = bispectrum_grid   # (n_bins, n_bins)
+            # Compute 2D bispectrum of the isolated pulse
+            pulses_bispectra[k] = compute_bispectrum_welch(
+                uniform_pulse, nperseg=_NPERSEG, noverlap=_NOVERLAP
+            )
 
-        # Copy labels and root attributes
-        labels_data  = h5_in["labels"][:] if "labels" in h5_in else None
-        labels_attrs = dict(h5_in["labels"].attrs) if "labels" in h5_in else {}
+        # Read labels dataset for copying (with its attrs)
+        labels_data  = labels
+        labels_attrs = dict(h5_in["labels"].attrs)
         root_attrs   = dict(h5_in.attrs)
 
     # Write output shard
     with h5py.File(output_path, "w") as h5_out:
-        # *** KEY OUTPUT: scenes_bispectra ***
+        # *** KEY OUTPUT: pulses_bispectra — one row per label entry ***
         h5_out.create_dataset(
-            "scenes_bispectra",
-            data=bispectra,
-            compression="gzip",   # ~3-5× size reduction for smooth surfaces
+            "pulses_bispectra",
+            data=pulses_bispectra,
+            compression="gzip",
             compression_opts=4,
         )
 
-        if labels_data is not None:
-            ds = h5_out.create_dataset("labels", data=labels_data)
-            for k, v in labels_attrs.items():
-                ds.attrs[k] = v
+        ds = h5_out.create_dataset("labels", data=labels_data)
+        for k, v in labels_attrs.items():
+            ds.attrs[k] = v
 
-        # Copy all original root attributes (preserves time_resolution_s etc.)
+        # Copy all original root attributes
         for k, v in root_attrs.items():
             h5_out.attrs[k] = v
 
         # Add bispectrum-specific metadata
-        # BUG FIX: record all Welch parameters, not just n_fft.
-        # 'bispectrum_padded_len' replaces the old 'bispectrum_n_fft' key.
-        h5_out.attrs["bispectrum_padded_len"]  = n_fft        # pad/crop target (4096)
-        h5_out.attrs["bispectrum_nperseg"]     = _NPERSEG     # Welch segment size (256)
-        h5_out.attrs["bispectrum_noverlap"]    = _NOVERLAP    # Welch overlap (128)
-        h5_out.attrs["bispectrum_freq_bins"]   = n_bins       # bins per axis (129)
-        h5_out.attrs["feature_type"]           = "bispectra_magnitude"
+        h5_out.attrs["bispectrum_padded_len"]  = n_fft
+        h5_out.attrs["bispectrum_nperseg"]     = _NPERSEG
+        h5_out.attrs["bispectrum_noverlap"]    = _NOVERLAP
+        h5_out.attrs["bispectrum_freq_bins"]   = n_bins
+        h5_out.attrs["feature_type"]           = "bispectra_magnitude_per_pulse"
 
     out_mb = os.path.getsize(output_path) / (1024 ** 2)
     print(f"    Output: {output_path}  ({out_mb:.1f} MB)")
@@ -275,7 +304,7 @@ def extract_features(
     n_fft: int = 4096,
 ):
     """
-    Process every shard in `input_dir` and write bispectra to a new
+    Process every shard in `input_dir` and write per-pulse bispectra to a new
     timestamped folder under `output_root/bispectra/`.
     Also registers the run in the SQLite lineage database.
     """
@@ -297,7 +326,7 @@ def extract_features(
             origin, root_id = row
 
     # Build output folder: data/features/bispectra/<timestamp>-<origin>-<root_id>-<node_id>/
-    folder_name      = f"{timestamp}-{origin}-{root_id}-{node_id}"
+    folder_name       = f"{timestamp}-{origin}-{root_id}-{node_id}"
     target_output_dir = os.path.join(output_root, "bispectra", folder_name)
     os.makedirs(target_output_dir, exist_ok=True)
 
@@ -307,24 +336,24 @@ def extract_features(
         return
 
     print("=" * 60)
-    print(f"  Bispectrum Feature Extraction")
+    print(f"  Bispectrum Feature Extraction  (PER-PULSE)")
     print(f"  Input    : {input_dir}")
     print(f"  Output   : {target_output_dir}")
-    print(f"  n_fft    : {n_fft}  (pad/crop target)")
-    print(f"  F bins   : {n_fft // 2 + 1}  (per axis)")
+    print(f"  n_fft    : {n_fft}  (pad/crop target per pulse)")
+    print(f"  nperseg  : {_NPERSEG}  →  F bins = {_NPERSEG // 2 + 1}")
     print(f"  Shards   : {len(h5_files)}")
     print("=" * 60)
 
     for h5_file in h5_files:
-        fname   = os.path.basename(h5_file)
-        out_f   = os.path.join(target_output_dir, fname)
+        fname = os.path.basename(h5_file)
+        out_f = os.path.join(target_output_dir, fname)
         print(f"\n[Shard] {fname}")
         process_shard(h5_file, out_f, n_fft)
 
     history_log = (
-        f"Bispectrum extraction. "
-        f"n_fft={n_fft}, freq_bins={n_fft // 2 + 1}. "
-        f"Pad/crop strategy. "
+        f"Per-pulse bispectrum extraction. "
+        f"n_fft={n_fft} (pad/crop per pulse), nperseg={_NPERSEG}, "
+        f"noverlap={_NOVERLAP}, freq_bins={_NPERSEG // 2 + 1}. "
         f"Shards={len(h5_files)}."
     )
 
@@ -332,7 +361,7 @@ def extract_features(
         register_process(
             parent_id        = parent_node_id,
             stage            = "feature_extraction",
-            method           = "bispectrum",
+            method           = "bispectrum_per_pulse",
             folder_path      = target_output_dir,
             appended_history = history_log,
             force_node_id    = node_id,
@@ -340,7 +369,7 @@ def extract_features(
         )
         print(f"\n[Lineage] Registered node {node_id} (child of {parent_node_id}).")
 
-    print(f"\n[Done] Bispectra saved to: {target_output_dir}")
+    print(f"\n[Done] Per-pulse bispectra saved to: {target_output_dir}")
     return target_output_dir
 
 
@@ -350,11 +379,11 @@ def extract_features(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Extract 2D Bispectrum magnitude features from raw 1D H5 shards."
+        description="Extract per-pulse 2D Bispectrum magnitude features from raw 1D H5 shards."
     )
     parser.add_argument(
         "--input_dir", type=str, required=True,
-        help="Directory containing raw .h5 shards (must have a 'scenes' dataset)."
+        help="Directory containing raw .h5 shards (must have 'scenes' and 'labels' datasets)."
     )
     parser.add_argument(
         "--output_root", type=str,
@@ -369,7 +398,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--n_fft", type=int, default=4096,
-        help="Target signal length for pad/crop before FFT (default: 4096)."
+        help="Target length for pad/crop of each isolated pulse before Welch FFT (default: 4096)."
     )
 
     args = parser.parse_args()

@@ -7,7 +7,7 @@ Dedicated training orchestrator for Exp08:
 
 KEY DIFFERENCES vs train_exp07.py
 -----------------------------------
-1.  Imports DECDataset_Exp08 (loads `scenes_bispectra`) instead of Exp07.
+1.  Imports DECDataset_Exp08 (loads `pulses_bispectra`) instead of Exp07.
 2.  Imports SupConDECTask_Exp08 (ViT backbone) instead of Exp07.
 3.  *** INTERACTIVE EPOCH SELECTION ***
     At startup, the script prompts the user to enter the number of Phase 1

@@ -50,9 +50,9 @@ task:
 training:
   device: "auto"
   batch_size: 64
-  phase1_epochs: 10
+  phase1_epochs: 150
   phase2_epochs: 10
-  epochs: 20
+  epochs: 160
   learning_rate_phase1: 0.000013375889821619214 # Tuned by Optuna (was 0.001)
   learning_rate_phase2: 0.009249310708245284 # Tuned by Optuna (was 0.0001)
   tuned_at: "20260529_165000"

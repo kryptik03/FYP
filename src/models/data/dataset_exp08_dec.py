@@ -5,26 +5,37 @@ Multi-Source PyTorch Dataset for Semi-Supervised Deep Embedded Clustering (Exp08
 
 KEY CHANGES vs Exp07 (STFT-based dataset)
 ------------------------------------------
-1.  Loads `scenes_bispectra` (pre-computed 2D bispectrum grids) instead of
-    `scenes_stft` (short-time Fourier transform spectrograms).
+1.  Loads `pulses_bispectra` (pre-computed per-pulse 2D bispectrum grids) instead
+    of `scenes_stft` (short-time Fourier transform spectrograms).
 
-2.  REMOVED: STFT-specific time-slicing logic (hop_length, s_t, e_t
-    conversion, pad_or_crop_2d for time-axis).
+    CRITICAL DISTINCTION: Unlike the STFT, the Bispectrum destroys the time axis.
+    It cannot be computed over a full scene and sliced afterwards. The feature
+    extraction script (extract_bispectra.py) therefore computes one bispectrum per
+    INDIVIDUAL ISOLATED PULSE, stored at `pulses_bispectra[k]` where `k` is the
+    column index in the `labels` array. This dataset simply fetches by pulse index.
 
-3.  REMOVED: AdaptiveMaxPool2d.  The Welch-method bispectrum grids are
-    already compact: 129 × 129 pixels.  We simply crop off one row and one
-    column (grid[:128, :128]) to make the size exactly divisible by the ViT
-    patch size of 16.  No pooling is needed or applied.
+2.  REMOVED: STFT-specific time-slicing logic (hop_length, s_t, e_t conversion,
+    pad_or_crop_2d for time-axis). The pulse is already a single compact grid.
+
+3.  REMOVED: AdaptiveMaxPool2d. The Welch-method bispectrum grids are already
+    compact: 129 × 129 pixels. We simply crop off one row and one column
+    (grid[:128, :128]) to make the size exactly divisible by the ViT patch size
+    of 16. No pooling is needed or applied.
 
 4.  UPDATED: `_augment_2d` — SpecAugment masking now targets BOTH frequency
     axes (ω₁ and ω₂) of the bispectrum instead of time/freq axes of an STFT.
 
+H5 Feature Shard Schema (produced by extract_bispectra.py):
+    pulses_bispectra : float32  (N_pulses, 129, 129)
+                       Row k = bispectrum of the pulse at labels[:, k].
+    labels           : float32  (7, N_pulses) — same column-k correspondence.
+
 Returned sample (Phase 1 — augmented):
-    (view1, view2, reported_class_id, gt_inst_id, shard_path, scene_idx, time_res, actual_class_id)
+    (view1, view2, reported_class_id, gt_inst_id, shard_path, pulse_idx, time_res, actual_class_id)
     All tensors in view1/view2 have shape (1, 128, 128).
 
 Returned sample (Phase 2 / inference — single):
-    (signal, reported_class_id, gt_inst_id, shard_path, scene_idx, time_res, actual_class_id)
+    (signal, reported_class_id, gt_inst_id, shard_path, pulse_idx, time_res, actual_class_id)
     signal has shape (1, 128, 128).
 """
 
@@ -90,7 +101,6 @@ def _augment_2d(bispectrum: np.ndarray) -> np.ndarray:
         if H > 4:
             w1_width = random.randint(1, H // 4)
             w1_start = random.randint(0, H - w1_width)
-            # Zero the stripe across all columns for this ω₁ band
             aug[:, w1_start : w1_start + w1_width, :] = 0.0
 
     # ------------------------------------------------------------------
@@ -102,7 +112,6 @@ def _augment_2d(bispectrum: np.ndarray) -> np.ndarray:
         if W > 4:
             w2_width = random.randint(1, W // 4)
             w2_start = random.randint(0, W - w2_width)
-            # Zero the stripe across all rows for this ω₂ band
             aug[:, :, w2_start : w2_start + w2_width] = 0.0
 
     return aug.astype(np.float32)
@@ -114,17 +123,22 @@ def _augment_2d(bispectrum: np.ndarray) -> np.ndarray:
 
 class DECDataset_Exp08(Dataset):
     """
-    Multi-source bispectrum dataset for Exp08 (SupCon + Semi-Supervised DEC).
+    Multi-source per-pulse bispectrum dataset for Exp08 (SupCon + Semi-Supervised DEC).
 
-    *** KEY STEP — 129→28 Crop (NO pooling) ***
+    *** KEY STEP — 129→128 Crop (NO pooling) ***
     The Welch-method bispectra stored on disk are (129, 129) grids.
-    To satisfy the ViT-B/16 requirement that image dimensions are divisible by
-    the patch size (16), we crop to (128, 128) by slicing off the last row and
-    column:  grid = grid[:128, :128]
+    To satisfy the ViT patch-embedding requirement that image dimensions are
+    divisible by patch_size=16, we crop to (128, 128) by slicing off the last
+    row and column: grid = grid[:128, :128].
 
-    This is a 1-pixel discard, not a downsampling.  No information is lost in
-    practice because the highest bispectral frequency bin (Nyquist) is typically
-    near-zero energy for band-limited PD signals.
+    This is a 1-pixel discard, not a downsampling. No information is lost in
+    practice because the highest bispectral frequency bin (Nyquist) is near-zero
+    energy for band-limited PD signals.
+
+    *** KEY CHANGE FROM EXP07 ***
+    The index stores `pulse_idx` (the column index into the labels array) rather
+    than `scene_idx` + `ch_idx`. This is because the bispectrum grid is stored
+    per-pulse in `pulses_bispectra[pulse_idx]`, not per-scene-channel pair.
 
     Label row indices (same schema as all previous Exp datasets):
     """
@@ -154,18 +168,18 @@ class DECDataset_Exp08(Dataset):
         self.label_fraction = label_fraction
 
         # self.index entries are tuples:
-        #   (shard_path, scene_idx, ch_idx, reported_class, actual_class, inst_id, time_res)
+        #   (shard_path, pulse_idx, reported_class, actual_class, inst_id, time_res)
         self.index: list[tuple] = []
         self._build_index(sources, shard_key)
 
     def _build_index(self, sources: list, shard_key: str):
         """
         Walk every shard in every source, read the labels array, and build a
-        flat list of (shard_path, scene_idx, ch_idx, ...) tuples.
+        flat list of (shard_path, pulse_idx, ...) tuples — one entry per pulse.
 
         Stratified Label Exposure: exactly `label_fraction` of pulses within
-        each individual shard have their ground-truth class revealed.  The rest
-        receive reported_class = -1 (unlabeled, used in SupCon / pairwise logic).
+        each individual shard have their ground-truth class revealed. The rest
+        receive reported_class = -1 (unlabeled).
         """
         for source in sources:
             root_path = os.path.abspath(source["path"])
@@ -180,42 +194,40 @@ class DECDataset_Exp08(Dataset):
                     continue
 
                 with h5py.File(shard_path, "r") as f:
-                    # Validate required datasets are present
                     if "labels" not in f or f["labels"].shape[1] == 0:
                         continue
 
-                    if "scenes_bispectra" not in f:
+                    if "pulses_bispectra" not in f:
                         print(
-                            f"[DECDataset_Exp08] Warning: 'scenes_bispectra' not found "
+                            f"[DECDataset_Exp08] Warning: 'pulses_bispectra' not found "
                             f"in {shard_path}. Did you run extract_bispectra.py?"
                         )
                         continue
 
-                    labels    = f["labels"][:]    # (7, N_pulses)
-                    time_res  = float(
+                    labels   = f["labels"][:]    # (7, N_pulses)
+                    time_res = float(
                         np.array(f.attrs.get("time_resolution_s", 1e-11)).item()
                     )
 
                 num_pulses  = labels.shape[1]
                 num_labeled = int(num_pulses * self.label_fraction)
 
-                # Stratified label exposure: shuffle booleans so exposed pulses
-                # are spread randomly within this shard.
+                # Stratified label exposure: randomly select which pulses are labeled
                 is_labeled_flags = [True] * num_labeled + [False] * (num_pulses - num_labeled)
                 random.shuffle(is_labeled_flags)
 
                 for k in range(num_pulses):
-                    actual_class_id  = int(labels[self.ROW_CLASS_ID,  k])
-                    is_labeled       = is_labeled_flags[k]
-                    reported_class   = actual_class_id if is_labeled else -1
+                    actual_class_id = int(labels[self.ROW_CLASS_ID,  k])
+                    is_labeled      = is_labeled_flags[k]
+                    reported_class  = actual_class_id if is_labeled else -1
 
+                    # *** KEY CHANGE: store pulse_idx (k) not scene_idx+ch_idx ***
                     self.index.append((
                         shard_path,
-                        int(labels[self.ROW_SCENE_ID,   k]),   # scene_idx
-                        int(labels[self.ROW_CHANNEL_ID, k]),   # ch_idx
-                        reported_class,                         # masked label
-                        actual_class_id,                        # ground truth
-                        int(labels[self.ROW_PULSE_ID,   k]),   # pulse / inst ID
+                        k,                                              # pulse_idx
+                        reported_class,                                 # masked label
+                        actual_class_id,                                # ground truth
+                        int(labels[self.ROW_PULSE_ID, k]),              # pulse / inst ID
                         time_res,
                     ))
 
@@ -231,12 +243,15 @@ class DECDataset_Exp08(Dataset):
     def _read_bispectrum(
         self,
         shard_path: str,
-        scene_idx: int,
-        ch_idx: int,
+        pulse_idx: int,
     ) -> np.ndarray:
         """
-        Load the pre-computed bispectrum grid for a single (scene, channel),
+        Load the pre-computed bispectrum grid for a single pulse,
         crop from 129×129 → 128×128, and normalise.
+
+        *** KEY CHANGE FROM EXP07 ***
+        Reads `pulses_bispectra[pulse_idx]` (shape 129×129) instead of
+        `scenes_bispectra[scene_idx, ch_idx]`.
 
         *** KEY STEP — Crop, NO pooling ***
         The grid produced by extract_bispectra.py is (129, 129).
@@ -248,13 +263,12 @@ class DECDataset_Exp08(Dataset):
             np.ndarray of shape (1, 128, 128), dtype float32.
         """
         with h5py.File(shard_path, "r") as f:
-            # scenes_bispectra has shape (N_scenes, N_channels, 129, 129)
-            grid = f["scenes_bispectra"][scene_idx, ch_idx, :, :].astype(np.float32)
+            # pulses_bispectra has shape (N_pulses, 129, 129)
+            grid = f["pulses_bispectra"][pulse_idx, :, :].astype(np.float32)
             # grid shape: (129, 129)
 
-        # *** KEY STEP — Crop 129→28 (discard Nyquist-edge bin) ***
-        # This makes the grid exactly divisible by patch_size=16.
-        grid = grid[:self.TARGET_SIZE, :self.TARGET_SIZE]  # (128, 128)
+        # *** KEY STEP — Crop 129→128 (discard Nyquist-edge bin) ***
+        grid = grid[:self.TARGET_SIZE, :self.TARGET_SIZE]   # (128, 128)
 
         # Add the channel dimension: (128, 128) → (1, 128, 128)
         grid = grid[np.newaxis, :, :]   # (1, 128, 128)
@@ -268,11 +282,11 @@ class DECDataset_Exp08(Dataset):
         return len(self.index)
 
     def __getitem__(self, idx: int):
-        (shard_path, scene_idx, ch_idx,
+        (shard_path, pulse_idx,
          reported_class, actual_class, inst_id, time_res) = self.index[idx]
 
-        # Load, crop (129→28), and normalise the bispectrum grid
-        grid = self._read_bispectrum(shard_path, scene_idx, ch_idx)
+        # Load, crop (129→128), and normalise the bispectrum grid
+        grid = self._read_bispectrum(shard_path, pulse_idx)
         # grid: np.float32, shape (1, 128, 128)
 
         if self.augment:
@@ -285,7 +299,7 @@ class DECDataset_Exp08(Dataset):
                 reported_class,
                 inst_id,
                 shard_path,
-                scene_idx,
+                pulse_idx,
                 float(time_res),
                 actual_class,
             )
@@ -297,7 +311,7 @@ class DECDataset_Exp08(Dataset):
                 reported_class,
                 inst_id,
                 shard_path,
-                scene_idx,
+                pulse_idx,
                 float(time_res),
                 actual_class,
             )

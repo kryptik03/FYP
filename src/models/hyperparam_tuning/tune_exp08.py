@@ -154,12 +154,7 @@ def objective(trial, base_config: dict) -> float:
         cfg["training"]["learning_rate_phase2"] = trial.suggest_float(
             "learning_rate_phase2", float(bounds[0]), float(bounds[1]), log=True
         )
-    # Suggest pairwise gamma (log-uniform)
-    if "pairwise_weight_gamma" in search_space:
-        bounds = search_space["pairwise_weight_gamma"]
-        cfg["task"]["pairwise_weight_gamma"] = trial.suggest_float(
-            "pairwise_weight_gamma", float(bounds[0]), float(bounds[1]), log=True
-        )
+    # (pairwise_weight_gamma removed to prevent metric-cheating loophole)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader_p1, train_loader_p2, val_loader_p1, val_loader_p2 = build_loaders(cfg)
@@ -280,8 +275,7 @@ if __name__ == "__main__":
         doc["training"]["learning_rate_phase1"] = round(best.params["learning_rate_phase1"], 10)
     if "learning_rate_phase2" in best.params:
         doc["training"]["learning_rate_phase2"] = round(best.params["learning_rate_phase2"], 10)
-    if "pairwise_weight_gamma" in best.params:
-        doc["task"]["pairwise_weight_gamma"] = round(best.params["pairwise_weight_gamma"], 6)
+
 
     doc["training"]["tuned_at"]       = tune_timestamp
     doc["training"]["tuning_node_id"] = tune_node_id

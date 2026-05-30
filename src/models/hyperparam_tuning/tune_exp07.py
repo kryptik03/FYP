@@ -150,7 +150,7 @@ def objective(trial, base_config: dict):
 
     # 4. Phase 1: SupCon
     task.set_phase(1, lr=cfg["training"]["learning_rate_phase1"])
-    tune_epochs_p1 = min(3, cfg["training"].get("phase1_epochs", 3))
+    tune_epochs_p1 = 3
     for epoch in range(tune_epochs_p1):
         task.train()
         for batch in train_loader_p1:
@@ -179,7 +179,7 @@ def objective(trial, base_config: dict):
     
     best_val_loss = float('inf')
     
-    tune_epochs_p2 = min(3, cfg["training"].get("phase2_epochs", 3))
+    tune_epochs_p2 = 3
     for epoch in range(tune_epochs_p2):
         task.train()
         for batch in train_loader_p2:
