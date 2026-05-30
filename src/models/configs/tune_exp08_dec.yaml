@@ -15,26 +15,26 @@
 experiment:
   name: "exp08_supcon_dec_vit_bispectrum"
   description: "ViT-B/16 + SupCon & Semi-Supervised DEC on 2D Bispectrum features.
-    CWRU, Synthesised, Measured (Void) & Eqn datasets. AdaptiveMaxPool to 224x224."
-  parent_node_id: "d46M"
+    CWRU, Synthesised, Measured (Void) & Eqn datasets."
+  parent_node_id: "rxpe"
   task_type: "supcon_dec_semi_vit_bispectrum"
 
 data:
   sources:
   - type: "cwru"
-    path: "data/features/bispectra/20260529_203700-cw-TuKT-pIzo"
+    path: "data/features/bispectra/20260530_220902-cw-TuKT-JTZF"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     val_shards: [14, 15, 16]
   - type: "equation"
-    path: "data/features/bispectra/20260529_202949-sy-0s6o-9xdr"
+    path: "data/features/bispectra/20260530_220912-sy-0s6o-NlA9"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     val_shards: [17, 18, 19, 20]
   - type: "synthesised"
-    path: "data/features/bispectra/20260529_204239-sy-1yGk-d46M"
+    path: "data/features/bispectra/20260530_220747-sy-1yGk-rxpe"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     val_shards: [17, 18, 19, 20]
   - type: "measured"
-    path: "data/features/bispectra/20260529_202839-ms-nQgf-pcZn"
+    path: "data/features/bispectra/20260530_221141-ms-nQgf-f4A9"
     train_shards: [1, 2, 3]
     val_shards: [4, 5]
   max_pulse_len: 4096     # Reference only (not used for time-slicing in Exp08)
