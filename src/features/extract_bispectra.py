@@ -84,6 +84,7 @@ from datetime import datetime
 
 import h5py
 import numpy as np
+import scipy.ndimage
 
 # ---------------------------------------------------------------------------
 # Ensure project root is importable
@@ -166,20 +167,18 @@ def pad_or_crop_1d(signal: np.ndarray, n_fft: int) -> np.ndarray:
 _NPERSEG  = 256
 _NOVERLAP = 128
 
-
-def compute_bispectrum_welch(signal: np.ndarray, nperseg: int = 256, noverlap: int = 128) -> np.ndarray:
+def compute_bispectrum_welch(signal: np.ndarray, nperseg: int = 256, noverlap: int = 128, L: int = 1) -> np.ndarray:
     """
-    Computes the Bispectrum magnitude using the segment-averaging (Welch) method.
-
-    B(f1, f2) = (1/K) * sum_k [ X_k(f1) · X_k(f2) · conj(X_k(f1+f2)) ]
-
+    Computes the Bispectrum magnitude using the exact equations from the paper:
+    - Zero-mean assumption
+    - Segment-averaging (Eq 8)
+    - Frequency-domain smoothing (Eq 7) using window parameter L.
+    
     Args:
-        signal   : 1D float32 array of fixed length (n_fft points after pad/crop).
-        nperseg  : Welch segment length (default 256 → 129 freq bins).
+        signal   : 1D float32 array of fixed length (n_fft points).
+        nperseg  : Welch segment length (default 256).
         noverlap : Overlap between consecutive segments (default 128).
-
-    Returns:
-        2D float32 array of shape (nperseg//2+1, nperseg//2+1) = (129, 129).
+        L        : Smoothing window radius for Eq 7 (default 1 yields a 3x3 filter).
     """
     step   = nperseg - noverlap
     starts = np.arange(0, len(signal) - nperseg + 1, step)
@@ -192,11 +191,31 @@ def compute_bispectrum_welch(signal: np.ndarray, nperseg: int = 256, noverlap: i
     f12_idx = np.clip(f1_idx[:, None] + f2_idx[None, :], 0, n_bins - 1)
 
     for start in starts:
-        segment = signal[start : start + nperseg] * np.hanning(nperseg)
+        segment = signal[start : start + nperseg]
+        
+        # PAPER FIX 1: Enforce zero-mean assumption
+        segment = segment - np.mean(segment)
+        
+        segment = segment * np.hanning(nperseg)
         X       = np.fft.rfft(segment, n=nperseg)
-        bispectrum_avg += X[f1_idx[:, None]] * X[f2_idx[None, :]] * np.conj(X[f12_idx])
+        
+        # Raw complex bispectrum for this segment
+        raw_b = X[f1_idx[:, None]] * X[f2_idx[None, :]] * np.conj(X[f12_idx])
+        bispectrum_avg += raw_b
 
+    # Equation 8: Average across segments
     bispectrum_avg /= max(len(starts), 1)
+    
+    # PAPER FIX 2: Equation 7 (Frequency-domain smoothing)
+    # A moving average of size (2L+1, 2L+1) applied to the complex bispectrum
+    if L > 0:
+        window_size = 2 * L + 1
+        # Smooth real and imaginary components separately
+        real_smoothed = scipy.ndimage.uniform_filter(bispectrum_avg.real, size=window_size)
+        imag_smoothed = scipy.ndimage.uniform_filter(bispectrum_avg.imag, size=window_size)
+        bispectrum_avg = real_smoothed + 1j * imag_smoothed
+
+    # Extract magnitude for the neural network
     return np.abs(bispectrum_avg).astype(np.float32)
 
 
@@ -287,6 +306,7 @@ def process_shard(input_path: str, output_path: str, n_fft: int):
         h5_out.attrs["bispectrum_nperseg"]     = _NPERSEG
         h5_out.attrs["bispectrum_noverlap"]    = _NOVERLAP
         h5_out.attrs["bispectrum_freq_bins"]   = n_bins
+        h5_out.attrs["bispectrum_L"]           = 1
         h5_out.attrs["feature_type"]           = "bispectra_magnitude_per_pulse"
 
     out_mb = os.path.getsize(output_path) / (1024 ** 2)
