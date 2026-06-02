@@ -28,25 +28,27 @@ experiment:
     ViT + Instance-SupCon + 4-Domain DANN (GRL) + 2-Channel Complex Bispectra.
     Solves Latent Space Fragmentation via Physics Invariance (Magnitude+Phase),
     Distance Invariance (cross-sensor pairing) and Domain Agnosticism (DANN).
+    DANN trained on equation, synthesised and measured, while SupCon/DEC 
+    trained on equation, synthesised, cwru and measured.
   parent_node_id: "VNce"
   task_type: "supcon_dec_dann_vit_bispectrum_v2"
 
 data:
   sources:
   - type: "cwru"
-    path: "data/features/bispectra_v2/PLACEHOLDER_CWRU"
+    path: "data/features/bispectra_v2/20260602_175959-cw-TuKT-zu1m"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     val_shards:   [14, 15, 16]
   - type: "equation"
-    path: "data/features/bispectra_v2/PLACEHOLDER_EQN"
+    path: "data/features/bispectra_v2/20260602_180138-sy-0s6o-o13c"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     val_shards:   [17, 18, 19, 20]
   - type: "synthesised"
-    path: "data/features/bispectra_v2/PLACEHOLDER_SYN"
+    path: "data/features/bispectra_v2/20260602_182145-sy-1yGk-HEXZ"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     val_shards:   [17, 18, 19, 20]
   - type: "measured"
-    path: "data/features/bispectra_v2/PLACEHOLDER_MS"
+    path: "data/features/bispectra_v2/20260602_182024-ms-nQgf-3Uuj"
     train_shards: [1, 2, 3]
     val_shards:   [4, 5]
 
@@ -56,11 +58,13 @@ data:
   # 4-domain map for DANN: source type → integer domain label.
   # Missing source types receive domain_label = -1 (excluded from domain loss).
   # The code handles any subset of 1–4 active source types gracefully.
+  # TAKE NOTE: Domain maps must be in ascending order without skipping any number.
+  # Labelling one as -1, means the next domain id should not skip 1 number. 
   domain_map:
     equation:    0    # Pure-math synthetic — no EM physics, clean analytic shape
     synthesised: 1    # HFSS co-simulation — EM propagation + geometry artefacts
-    cwru:        2    # Bearing lab measurements — real hardware, different sensor
-    measured:    3    # UHF PD sensor — target domain, oscilloscope quantisation
+    cwru:        -1   # Bearing lab measurements — real hardware, different sensor
+    measured:    2    # UHF PD sensor — target domain, oscilloscope quantisation
 
 model:
   in_channels:   2      # Magnitude (ch0) + Phase (ch1) bispectrum channels
@@ -71,7 +75,7 @@ model:
   depth:         6      # Transformer encoder blocks
   embedding_dim: 128    # L2-normalised DEC/SupCon output dimension
   n_clusters:    10     # PD classes to cluster
-  n_domains:     4      # Domain head output size (must match len(data.domain_map))
+  n_domains:     3      # Domain head output size (must match len(data.domain_map))
 
 task:
   simclr_temperature:    0.5    # SupCon temperature τ
@@ -79,14 +83,14 @@ task:
   dec_tol:               0.001  # DEC convergence tolerance
   pairwise_weight_gamma: 1.0    # Weight for pairwise must-link/cannot-link loss
   dann_weight:           0.5    # λ_dann scaling factor (tunable via tune_exp09.py)
-  dann_lambda_max:       1.0    # GRL lambda ceiling (ramped up via schedule)
+  dann_lambda_max:       0.5    # GRL lambda ceiling (ramped up via schedule)
 
 training:
   device:              "auto"  # "auto" → CUDA if available, else CPU
   batch_size:          32
-  phase1_epochs:       30      # Phase 1 default — see epoch advice below
-  phase2_epochs:       20      # Phase 2 default
-  epochs:              50      # Total kept for config compatibility
+  phase1_epochs:       35      # Phase 1 default — see epoch advice below
+  phase2_epochs:       25      # Phase 2 default
+  epochs:              60      # Total kept for config compatibility
   learning_rate_phase1: 1.0e-4
   learning_rate_phase2: 1.0e-4
 

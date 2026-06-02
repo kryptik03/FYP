@@ -335,7 +335,7 @@ def extract_features(
     print(f"  Input    : {input_dir}")
     print(f"  Output   : {target_output_dir}")
     print(f"  n_fft    : {n_fft}  (pad/crop target per pulse)")
-    print(f"  nperseg  : {_NPERSEG}  →  F bins = {_NPERSEG // 2 + 1}")
+    print(f"  nperseg  : {_NPERSEG}  ->  F bins = {_NPERSEG // 2 + 1}")
     print(f"  Channels : [0=magnitude, 1=phase]")
     print(f"  Shards   : {len(h5_files)}")
     print("=" * 60)
