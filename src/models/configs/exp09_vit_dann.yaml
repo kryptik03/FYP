@@ -30,7 +30,7 @@ experiment:
     Distance Invariance (cross-sensor pairing) and Domain Agnosticism (DANN).
     DANN trained on equation, synthesised and measured, while SupCon/DEC 
     trained on equation, synthesised, cwru and measured.
-  parent_node_id: "VNce"
+  parent_node_id: "HEXZ"
   task_type: "supcon_dec_dann_vit_bispectrum_v2"
 
 data:
@@ -78,11 +78,11 @@ model:
   n_domains:     3      # Domain head output size (must match len(data.domain_map))
 
 task:
-  simclr_temperature:    0.5    # SupCon temperature τ
+  simclr_temperature:    0.5    # SupCon temperature τ. Lower = clusters are more separated.
   dec_update_interval:   140    # Target-distribution update frequency (batches)
   dec_tol:               0.001  # DEC convergence tolerance
   pairwise_weight_gamma: 1.0    # Weight for pairwise must-link/cannot-link loss
-  dann_weight:           0.5    # λ_dann scaling factor (tunable via tune_exp09.py)
+  dann_weight:           0.3445  # λ_dann scaling factor — tuned by Optuna (node zefe)
   dann_lambda_max:       0.5    # GRL lambda ceiling (ramped up via schedule)
 
 training:
@@ -91,8 +91,11 @@ training:
   phase1_epochs:       35      # Phase 1 default — see epoch advice below
   phase2_epochs:       25      # Phase 2 default
   epochs:              60      # Total kept for config compatibility
-  learning_rate_phase1: 1.0e-4
-  learning_rate_phase2: 1.0e-4
+  learning_rate_phase1: 2.3764e-4   # Tuned by Optuna trial 0 (node zefe)
+  learning_rate_phase2: 1.0264e-5   # Tuned by Optuna trial 0 (node zefe)
+  tuned_at:            "20260602_135446"   # Optuna completion timestamp
+  tuning_node_id:      "zefe"
+  tuning_val_loss:     1.18287542
 
   # --- Epoch guidance ---
   # T4 GPU (Colab free):   ~30-40 min total  (estimate: ~40-50s/epoch)

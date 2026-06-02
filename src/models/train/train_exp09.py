@@ -110,6 +110,207 @@ def get_grad_norm(model: torch.nn.Module) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Google Drive Intermediate Checkpointing (Colab)
+# ---------------------------------------------------------------------------
+
+def gdrive_save(
+    node_id:        str,
+    epoch:          int,
+    phase:          int,
+    weights_dir:    str,
+    config_path:    str,
+    gdrive_dir:     str = "/content/drive/MyDrive/Colab_Intermediate_Training",
+):
+    """
+    Copies the latest checkpoint .pt and config .yaml to Google Drive.
+
+    SAFETY DESIGN:
+    - The entire function is wrapped in a broad try/except.
+    - ANY failure (Drive not mounted, quota, network drop, permission error)
+      prints a warning and returns immediately — training NEVER aborts.
+    - Files are written to a temp name first, then renamed atomically
+      (prevents a partial write from corrupting the Drive copy).
+
+    Args:
+        node_id     : Current training node ID (used in checkpoint filename).
+        epoch       : Current epoch number (for log messages only).
+        phase       : 1 or 2 (for log messages only).
+        weights_dir : Local directory containing model_<node_id>.pt.
+        config_path : Path to the YAML config to back up alongside the weights.
+        gdrive_dir  : Destination folder on Google Drive.
+    """
+    try:
+        import shutil
+
+        src_weight = os.path.join(weights_dir, f"model_{node_id}.pt")
+        if not os.path.exists(src_weight):
+            # No checkpoint saved yet (e.g., val loss hasn't improved even once).
+            print(f"[GDrive] Epoch {epoch} P{phase}: no checkpoint to copy yet, skipping.")
+            return
+
+        os.makedirs(gdrive_dir, exist_ok=True)
+
+        # --- Copy weights (atomic: write to .tmp, then rename) ---
+        dst_weight     = os.path.join(gdrive_dir, f"model_{node_id}.pt")
+        dst_weight_tmp = dst_weight + ".tmp"
+        shutil.copy2(src_weight, dst_weight_tmp)
+        os.replace(dst_weight_tmp, dst_weight)
+
+        # --- Copy config ---
+        if os.path.exists(config_path):
+            dst_config     = os.path.join(gdrive_dir, f"config_{node_id}.yaml")
+            dst_config_tmp = dst_config + ".tmp"
+            shutil.copy2(config_path, dst_config_tmp)
+            os.replace(dst_config_tmp, dst_config)
+
+        print(
+            f"[GDrive] Epoch {epoch} P{phase}: checkpoint saved to "
+            f"{gdrive_dir}/model_{node_id}.pt"
+        )
+
+    except Exception as e:
+        # Non-fatal — warn and let training continue
+        print(f"[GDrive] WARNING: Drive save FAILED at epoch {epoch} P{phase} — {e}")
+        print("[GDrive] Training will continue unaffected.")
+
+
+# ---------------------------------------------------------------------------
+# Resume State — Save and Load for Colab Reconnect Recovery
+# ---------------------------------------------------------------------------
+
+def save_resume_state(
+    node_id:           str,
+    abs_epoch_done:    int,
+    phase:             int,
+    phase1_epochs:     int,
+    phase2_epochs:     int,
+    task,
+    history:           dict,
+    best_val_loss_p1:  float,
+    best_val_loss_p2:  float,
+    best_epoch:        int,
+    epoch_times:       list,
+    kmeans_done:       bool,
+    local_weights_dir: str,
+    gdrive_dir:        str,
+):
+    """
+    Saves a full training-resumption checkpoint as resume_<node_id>.pt.
+    Stored locally first, then mirrored to Google Drive (non-fatal on failure).
+
+    NOTE: The optimizer is NOT saved — set_phase() creates a fresh Adam at the
+    start of every epoch, so there are no accumulated momentum terms to restore.
+
+    What IS saved:
+        model_state_dict    — weights + cluster centroids (nn.Parameter, auto-included)
+        history             — loss curves so plots are continuous after resume
+        best_val_loss_p1/p2 — checkpoint-on-best-val still works after resume
+        best_epoch, epoch_times — for lineage and timing plots
+        kmeans_done         — skip K-Means re-run if resuming mid-Phase-2
+        grl_lambda          — current GRL lambda for diagnostic accuracy
+    """
+    import shutil
+
+    state = {
+        "abs_epoch_done":   abs_epoch_done,
+        "phase":            phase,
+        "phase1_epochs":    phase1_epochs,
+        "phase2_epochs":    phase2_epochs,
+        "node_id":          node_id,
+        "model_state":      task.state_dict(),
+        "history":          history,
+        "best_val_loss_p1": best_val_loss_p1,
+        "best_val_loss_p2": best_val_loss_p2,
+        "best_epoch":       best_epoch,
+        "epoch_times":      epoch_times,
+        "kmeans_done":      kmeans_done,
+        "grl_lambda":       task.backbone.grl.lambda_,
+        "dann_weight":      task.dann_weight,
+    }
+
+    # Atomic local write (.tmp then rename prevents corruption on mid-write crash)
+    os.makedirs(local_weights_dir, exist_ok=True)
+    local_path = os.path.join(local_weights_dir, f"resume_{node_id}.pt")
+    tmp_path   = local_path + ".tmp"
+    torch.save(state, tmp_path)
+    os.replace(tmp_path, local_path)
+    print(f"[Resume] State saved locally -> {local_path}")
+
+    # Mirror to GDrive (non-fatal)
+    try:
+        os.makedirs(gdrive_dir, exist_ok=True)
+        dst     = os.path.join(gdrive_dir, f"resume_{node_id}.pt")
+        dst_tmp = dst + ".tmp"
+        shutil.copy2(local_path, dst_tmp)
+        os.replace(dst_tmp, dst)
+        print(f"[Resume] Mirrored to GDrive -> {dst}")
+    except Exception as e:
+        print(f"[Resume] WARNING: GDrive mirror FAILED — {e}")
+        print("[Resume] Local resume file is intact. Training will continue.")
+
+
+def load_resume_state(
+    resume_path:   str,
+    task,
+    device:        torch.device,
+    phase1_epochs: int,
+    phase2_epochs: int,
+) -> dict:
+    """
+    Loads a resume_<node_id>.pt file and restores model + cluster-centroid state.
+
+    Returns a dict with:
+        p1_done, p2_done    — epochs already completed in each phase
+        kmeans_done         — whether K-Means init has already run
+        history             — loss history to extend (not overwrite)
+        best_val_loss_p1/p2 — for correct checkpoint-on-best-val after resume
+        best_epoch          — for lineage reporting
+        epoch_times         — for timing plot continuity
+        node_id             — original node_id (preserved for lineage identity)
+    """
+    if not os.path.exists(resume_path):
+        raise FileNotFoundError(
+            f"[Resume] File not found: {resume_path}\n"
+            f"         Check --resume_from points to a valid resume_<node_id>.pt."
+        )
+
+    print(f"[Resume] Loading from: {resume_path}")
+    ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+
+    # Restores weights AND cluster_layer centroids (they are nn.Parameters)
+    task.load_state_dict(ckpt["model_state"])
+
+    abs_done = ckpt.get("abs_epoch_done", 0)
+    p1_done  = min(abs_done, phase1_epochs)
+    p2_done  = max(0, abs_done - phase1_epochs)
+
+    # Restore GRL state so lambda schedule is consistent
+    if "grl_lambda" in ckpt:
+        task.backbone.set_dann_lambda(ckpt["grl_lambda"])
+    if "dann_weight" in ckpt:
+        task.dann_weight = ckpt["dann_weight"]
+
+    print(
+        f"[Resume] Restored: abs_epoch={abs_done} | "
+        f"P1 done={p1_done}/{phase1_epochs} | "
+        f"P2 done={p2_done}/{phase2_epochs} | "
+        f"kmeans_done={ckpt.get('kmeans_done', False)}"
+    )
+
+    return {
+        "p1_done":          p1_done,
+        "p2_done":          p2_done,
+        "kmeans_done":      ckpt.get("kmeans_done", False),
+        "history":          ckpt.get("history"),
+        "best_val_loss_p1": ckpt.get("best_val_loss_p1", float("inf")),
+        "best_val_loss_p2": ckpt.get("best_val_loss_p2", float("inf")),
+        "best_epoch":       ckpt.get("best_epoch", -1),
+        "epoch_times":      ckpt.get("epoch_times", []),
+        "node_id":          ckpt.get("node_id"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # GRL Lambda Schedule
 # ---------------------------------------------------------------------------
 
@@ -341,6 +542,25 @@ def main():
                         help="1 shard per source, 1+1 epochs, batch=4.")
     parser.add_argument("--no_prompt", action="store_true",
                         help="Skip interactive epoch prompt; use YAML values.")
+    parser.add_argument(
+        "--gdrive_interval", type=int, default=3,
+        help="Save checkpoint to Google Drive every N epochs (0 = disabled). Default: 3.",
+    )
+    parser.add_argument(
+        "--gdrive_dir", type=str,
+        default="/content/drive/MyDrive/Colab_Intermediate_Training",
+        help="Google Drive destination folder for intermediate checkpoints.",
+    )
+    parser.add_argument(
+        "--resume_from", type=str, default=None,
+        metavar="PATH",
+        help=(
+            "Path to a resume_<node_id>.pt saved by a previous interrupted run. "
+            "The script will skip already-completed epochs and continue from the "
+            "saved model weights, loss history, and best-val tracking. "
+            "Example: --resume_from /content/drive/MyDrive/Colab_Intermediate_Training/resume_AbCd.pt"
+        ),
+    )
     args = parser.parse_args()
 
     config_path = os.path.abspath(args.config)
@@ -421,6 +641,18 @@ def main():
     weights_dir     = os.path.abspath(out_cfg["weights_dir"])
     config_snap_dir = os.path.abspath(out_cfg["config_snapshot_dir"])
 
+    gdrive_interval = args.gdrive_interval
+    gdrive_dir      = args.gdrive_dir
+    if gdrive_interval > 0:
+        print(f"[GDrive] Intermediate checkpointing ENABLED every {gdrive_interval} epoch(s) -> {gdrive_dir}")
+    else:
+        print("[GDrive] Intermediate checkpointing DISABLED (--gdrive_interval 0)")
+
+    # Resume tracking — overwritten by load_resume_state() if --resume_from is set
+    _resume_p1_done = 0     # Phase 1 epochs already completed before this run
+    _resume_p2_done = 0     # Phase 2 epochs already completed before this run
+    _kmeans_done    = False  # Whether K-Means init has already been run
+
     # Domain map from config
     domain_map = data_cfg.get("domain_map", None)
 
@@ -459,13 +691,15 @@ def main():
     total_params = sum(p.numel() for p in task.parameters() if p.requires_grad)
     print(f"[Model] Trainable params: {total_params:,}")
 
-    # Tracking
-    best_epoch     = -1
-    epoch_times    = []
-    train_start    = time.time()
-    start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # -----------------------------------------------------------------------
+    # Initialise tracking variables (may be overwritten by resume loading)
+    # -----------------------------------------------------------------------
+    best_epoch       = -1
+    best_val_loss_p1 = float("inf")
+    best_val_loss_p2 = float("inf")
+    epoch_times      = []
 
-    history = {
+    _fresh_history = {
         "p1_train_supcon":   [],
         "p1_train_domain":   [],
         "p1_train_total":    [],
@@ -486,12 +720,52 @@ def main():
     }
 
     # -----------------------------------------------------------------------
+    # Resume Loading
+    # -----------------------------------------------------------------------
+    if args.resume_from:
+        print(f"\n[Resume] === Resuming interrupted run ===")
+        rs = load_resume_state(
+            resume_path   = args.resume_from,
+            task          = task,
+            device        = device,
+            phase1_epochs = phase1_epochs,
+            phase2_epochs = phase2_epochs,
+        )
+        _resume_p1_done  = rs["p1_done"]
+        _resume_p2_done  = rs["p2_done"]
+        _kmeans_done     = rs["kmeans_done"]
+        best_val_loss_p1 = rs["best_val_loss_p1"]
+        best_val_loss_p2 = rs["best_val_loss_p2"]
+        best_epoch       = rs["best_epoch"]
+        epoch_times      = rs["epoch_times"]
+        # Restore history so loss curves are uninterrupted in plots
+        history = rs["history"] if rs["history"] is not None else _fresh_history
+        # Preserve the original node_id for lineage continuity
+        if rs["node_id"] and rs["node_id"] != node_id:
+            print(f"[Resume] Adopting original node_id {rs['node_id']} (discarding {node_id})")
+            node_id = rs["node_id"]
+        print(
+            f"[Resume] Skipping P1 epochs 1-{_resume_p1_done}, "
+            f"P2 epochs 1-{_resume_p2_done}.\n"
+        )
+    else:
+        history = _fresh_history
+
+    train_start    = time.time()
+    start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # -----------------------------------------------------------------------
     # Phase 1 — Instance-SupCon + DANN Pre-Training
     # -----------------------------------------------------------------------
     print(f"\n[P1] === Instance-SupCon + DANN Pre-Training ({phase1_epochs} epochs) ===")
-    best_val_loss_p1 = float("inf")
+    if _resume_p1_done > 0:
+        print(f"[P1] Resuming from epoch {_resume_p1_done + 1} (best val so far: {best_val_loss_p1:.6f})")
 
     for epoch in range(1, phase1_epochs + 1):
+        # Skip epochs already completed in a previous interrupted run
+        if epoch <= _resume_p1_done:
+            continue
+
         # GRL lambda ramp over the full training timeline
         epoch_idx    = epoch - 1
         dann_lambda  = compute_dann_lambda(epoch_idx, total_epochs, dann_lambda_max)
@@ -550,36 +824,67 @@ def main():
             task.save_checkpoint(epoch, node_id, weights_dir, config_snap_dir, config_path)
             print(f"    ^ Best P1 val SupCon: {best_val_loss_p1:.4f}")
 
+        # --- Periodic Google Drive backup + resume state save ---
+        if gdrive_interval > 0 and epoch % gdrive_interval == 0:
+            gdrive_save(
+                node_id     = node_id,
+                epoch       = epoch,
+                phase       = 1,
+                weights_dir = weights_dir,
+                config_path = config_path,
+                gdrive_dir  = gdrive_dir,
+            )
+            save_resume_state(
+                node_id           = node_id,
+                abs_epoch_done    = epoch,
+                phase             = 1,
+                phase1_epochs     = phase1_epochs,
+                phase2_epochs     = phase2_epochs,
+                task              = task,
+                history           = history,
+                best_val_loss_p1  = best_val_loss_p1,
+                best_val_loss_p2  = best_val_loss_p2,
+                best_epoch        = best_epoch,
+                epoch_times       = epoch_times,
+                kmeans_done       = False,
+                local_weights_dir = weights_dir,
+                gdrive_dir        = gdrive_dir,
+            )
+
     # -----------------------------------------------------------------------
     # K-Means Centroid Initialisation
     # -----------------------------------------------------------------------
-    print("\n[Init] Extracting embeddings for K-Means centroid init...")
-    kmeans_t0 = time.time()
+    if _kmeans_done:
+        print("\n[Init] K-Means SKIPPED — cluster centroids restored from resume checkpoint.")
+        kmeans_time_s = 0.0
+    else:
+        print("\n[Init] Extracting embeddings for K-Means centroid init...")
+        kmeans_t0 = time.time()
 
-    init_ds = DECDataset_Exp09(
-        sources        = data_cfg["sources"],
-        shard_key      = "train_shards",
-        max_pulse_len  = data_cfg.get("max_pulse_len", 4096),
-        augment        = False,
-        label_fraction = label_fraction,
-        domain_map     = domain_map,
-    )
-    init_loader = DataLoader(init_ds, batch_size=bs, shuffle=False, **loader_kwargs)
+        init_ds = DECDataset_Exp09(
+            sources        = data_cfg["sources"],
+            shard_key      = "train_shards",
+            max_pulse_len  = data_cfg.get("max_pulse_len", 4096),
+            augment        = False,
+            label_fraction = label_fraction,
+            domain_map     = domain_map,
+        )
+        init_loader = DataLoader(init_ds, batch_size=bs, shuffle=False, **loader_kwargs)
 
-    all_embs = []
-    task.eval()
-    with torch.no_grad():
-        for batch in init_loader:
-            sig = batch[0].to(device)   # (B, 2, 128, 128)
-            z, _ = task.backbone(sig)
-            all_embs.append(z.cpu().numpy())
+        all_embs = []
+        task.eval()
+        with torch.no_grad():
+            for batch in init_loader:
+                sig = batch[0].to(device)   # (B, 2, 128, 128)
+                z, _ = task.backbone(sig)
+                all_embs.append(z.cpu().numpy())
 
-    if not all_embs:
-        raise RuntimeError("[Init] No embeddings extracted for K-Means.")
+        if not all_embs:
+            raise RuntimeError("[Init] No embeddings extracted for K-Means.")
 
-    task.init_cluster_centroids(np.concatenate(all_embs, axis=0))
-    kmeans_time_s = round(time.time() - kmeans_t0, 2)
-    print(f"[Init] K-Means init completed in {kmeans_time_s:.1f}s")
+        task.init_cluster_centroids(np.concatenate(all_embs, axis=0))
+        kmeans_time_s = round(time.time() - kmeans_t0, 2)
+        print(f"[Init] K-Means init completed in {kmeans_time_s:.1f}s")
 
     # -----------------------------------------------------------------------
     # Phase 2 — Semi-Supervised Spherical DEC + DANN
@@ -606,9 +911,14 @@ def main():
                                  drop_last=True, **loader_kwargs)
     val_loader_p2   = DataLoader(val_ds_p2,   batch_size=bs, shuffle=False, **loader_kwargs)
 
-    best_val_loss_p2 = float("inf")
+    if _resume_p2_done > 0:
+        print(f"[P2] Resuming from epoch {_resume_p2_done + 1} (best val so far: {best_val_loss_p2:.6f})")
 
     for epoch in range(1, phase2_epochs + 1):
+        # Skip epochs already completed in a previous interrupted run
+        if epoch <= _resume_p2_done:
+            continue
+
         # Continue GRL ramp from where Phase 1 left off
         epoch_idx   = (phase1_epochs - 1) + epoch
         dann_lambda = compute_dann_lambda(epoch_idx, total_epochs, dann_lambda_max)
@@ -672,6 +982,33 @@ def main():
             best_epoch       = phase1_epochs + epoch
             task.save_checkpoint(best_epoch, node_id, weights_dir, config_snap_dir, config_path)
             print(f"    ^ Best P2 val DEC loss: {best_val_loss_p2:.4f}")
+
+        # --- Periodic Google Drive backup + resume state save ---
+        if gdrive_interval > 0 and epoch % gdrive_interval == 0:
+            gdrive_save(
+                node_id     = node_id,
+                epoch       = phase1_epochs + epoch,
+                phase       = 2,
+                weights_dir = weights_dir,
+                config_path = config_path,
+                gdrive_dir  = gdrive_dir,
+            )
+            save_resume_state(
+                node_id           = node_id,
+                abs_epoch_done    = phase1_epochs + epoch,
+                phase             = 2,
+                phase1_epochs     = phase1_epochs,
+                phase2_epochs     = phase2_epochs,
+                task              = task,
+                history           = history,
+                best_val_loss_p1  = best_val_loss_p1,
+                best_val_loss_p2  = best_val_loss_p2,
+                best_epoch        = best_epoch,
+                epoch_times       = epoch_times,
+                kmeans_done       = True,   # K-Means is always done by Phase 2
+                local_weights_dir = weights_dir,
+                gdrive_dir        = gdrive_dir,
+            )
 
     # -----------------------------------------------------------------------
     # Save timing + metrics JSON
