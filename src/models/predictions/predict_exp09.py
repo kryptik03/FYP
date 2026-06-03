@@ -374,24 +374,25 @@ def group_by_instance(
     Assign a predicted instance class by majority vote over all sensors
     that observed the same physical event (same Pulse_Instance_ID).
     Returns (gt_inst_ids, pred_inst_ids).
+
+    NOTE: DataLoader(shuffle=False) preserves dataset.index insertion order,
+    so result index i corresponds directly to dataset.index[i].
+    This gives an O(N) lookup instead of an O(N²) scan.
     """
     n = len(pulse_idxs)
     gt_inst_ids   = np.full(n, -1, dtype=np.int32)
     pred_inst_ids = np.full(n, -1, dtype=np.int32)
 
-    # Group flat indices by (shard_path, global_inst_id)
+    # Group flat indices by global_inst_id — O(N) direct lookup
     from collections import defaultdict
     group: dict[int, list[int]] = defaultdict(list)
 
     for i in range(n):
-        # Recover global_inst_id from dataset index
-        sp = shard_paths[i]
-        for entry_flat, entry in enumerate(dataset.index):
-            if entry[0] == sp and entry[1] == int(pulse_idxs[i]):
-                gid = entry[4]  # global_inst_id
-                gt_inst_ids[i] = gid
-                group[gid].append(i)
-                break
+        entry = dataset.index[i]   # (shard_path, pulse_idx, reported_class, actual_class,
+                                   #  global_inst_id, time_res, domain_label)
+        gid = entry[4]             # global_inst_id
+        gt_inst_ids[i] = gid
+        group[gid].append(i)
 
     for gid, idxs in group.items():
         preds = pred_class_ids[idxs]
@@ -402,6 +403,7 @@ def group_by_instance(
                 pred_inst_ids[i] = majority
 
     return gt_inst_ids, pred_inst_ids
+
 
 
 # ---------------------------------------------------------------------------

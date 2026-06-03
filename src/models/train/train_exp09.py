@@ -198,18 +198,28 @@ def save_resume_state(
     Saves a full training-resumption checkpoint as resume_<node_id>.pt.
     Stored locally first, then mirrored to Google Drive (non-fatal on failure).
 
-    NOTE: The optimizer is NOT saved — set_phase() creates a fresh Adam at the
-    start of every epoch, so there are no accumulated momentum terms to restore.
-
     What IS saved:
         model_state_dict    — weights + cluster centroids (nn.Parameter, auto-included)
+        optimizer_state     — Adam first/second moments (for momentum continuity on resume)
+        optimizer_phase     — which phase (1 or 2) the optimizer belongs to
         history             — loss curves so plots are continuous after resume
         best_val_loss_p1/p2 — checkpoint-on-best-val still works after resume
         best_epoch, epoch_times — for lineage and timing plots
         kmeans_done         — skip K-Means re-run if resuming mid-Phase-2
         grl_lambda          — current GRL lambda for diagnostic accuracy
+
+    NOTE: The optimizer save is non-fatal — if it fails (e.g. disk full),
+    training continues and resumes with a fresh Adam on the next run.
     """
     import shutil
+
+    # --- Try to capture optimizer state (non-fatal if unavailable) ---
+    optimizer_state = None
+    try:
+        if task._optimizer is not None:
+            optimizer_state = task._optimizer.state_dict()
+    except Exception as e:
+        print(f"[Resume] WARNING: Could not capture optimizer state — {e}. Proceeding without it.")
 
     state = {
         "abs_epoch_done":   abs_epoch_done,
@@ -218,6 +228,8 @@ def save_resume_state(
         "phase2_epochs":    phase2_epochs,
         "node_id":          node_id,
         "model_state":      task.state_dict(),
+        "optimizer_state":  optimizer_state,
+        "optimizer_phase":  phase,
         "history":          history,
         "best_val_loss_p1": best_val_loss_p1,
         "best_val_loss_p2": best_val_loss_p2,
@@ -307,6 +319,8 @@ def load_resume_state(
         "best_epoch":       ckpt.get("best_epoch", -1),
         "epoch_times":      ckpt.get("epoch_times", []),
         "node_id":          ckpt.get("node_id"),
+        "optimizer_state":  ckpt.get("optimizer_state"),   # None on old checkpoints
+        "optimizer_phase":  ckpt.get("optimizer_phase", 1),
     }
 
 
@@ -807,19 +821,36 @@ def main():
     # -----------------------------------------------------------------------
     # Phase 1 — Instance-SupCon + DANN Pre-Training
     # -----------------------------------------------------------------------
+    # Initialise Phase 1 optimizer ONCE before the loop.
+    # IMPORTANT: set_phase re-creates Adam, which resets all momentum.
+    # Only dann_lambda needs updating per-epoch; use set_dann_lambda for that.
     print(f"\n[P1] === Instance-SupCon + DANN Pre-Training ({phase1_epochs} epochs) ===")
     if _resume_p1_done > 0:
         print(f"[P1] Resuming from epoch {_resume_p1_done + 1} (best val so far: {best_val_loss_p1:.6f})")
+    _init_dann_lambda = compute_dann_lambda(0, total_epochs, dann_lambda_max)
+    task.set_phase(1, lr=lr1, dann_weight=dann_weight, dann_lambda=_init_dann_lambda)
+    # Restore Adam momentum state if resuming mid-Phase-1 (non-fatal on mismatch)
+    if args.resume_from:
+        _opt_state  = rs.get("optimizer_state")
+        _opt_phase  = rs.get("optimizer_phase", 1)
+        if _opt_state is not None and _opt_phase == 1:
+            try:
+                task._optimizer.load_state_dict(_opt_state)
+                print("[Resume] Phase 1 optimizer state restored (Adam momentum preserved).")
+            except Exception as e:
+                print(f"[Resume] WARNING: Could not restore Phase 1 optimizer state — {e}.")
+                print("[Resume] Starting with fresh Adam (training unaffected).")
 
     for epoch in range(1, phase1_epochs + 1):
         # Skip epochs already completed in a previous interrupted run
         if epoch <= _resume_p1_done:
             continue
 
-        # GRL lambda ramp over the full training timeline
-        epoch_idx    = epoch - 1
-        dann_lambda  = compute_dann_lambda(epoch_idx, total_epochs, dann_lambda_max)
-        task.set_phase(1, lr=lr1, dann_weight=dann_weight, dann_lambda=dann_lambda)
+        # GRL lambda ramp over the full training timeline — does NOT reset the optimizer
+        epoch_idx   = epoch - 1
+        dann_lambda = compute_dann_lambda(epoch_idx, total_epochs, dann_lambda_max)
+        task.backbone.set_dann_lambda(dann_lambda)
+        task.dann_weight = dann_weight
         history["dann_lambda"].append(round(dann_lambda, 6))
 
         t0 = time.time()
@@ -924,10 +955,11 @@ def main():
         all_embs = []
         task.eval()
         with torch.no_grad():
-            for batch in init_loader:
-                sig = batch[0].to(device)   # (B, 2, 128, 128)
-                z, _ = task.backbone(sig)
-                all_embs.append(z.cpu().numpy())
+            with torch.cuda.amp.autocast(enabled=task.use_amp):
+                for batch in init_loader:
+                    sig = batch[0].to(device)   # (B, 2, 128, 128)
+                    z, _ = task.backbone(sig)
+                    all_embs.append(z.cpu().numpy())
 
         if not all_embs:
             raise RuntimeError("[Init] No embeddings extracted for K-Means.")
@@ -964,15 +996,31 @@ def main():
     if _resume_p2_done > 0:
         print(f"[P2] Resuming from epoch {_resume_p2_done + 1} (best val so far: {best_val_loss_p2:.6f})")
 
+    # Initialise Phase 2 optimizer ONCE before the loop.
+    _init_dann_lambda_p2 = compute_dann_lambda(phase1_epochs, total_epochs, dann_lambda_max)
+    task.set_phase(2, lr=lr2, dann_weight=dann_weight, dann_lambda=_init_dann_lambda_p2)
+    # Restore Adam momentum state if resuming mid-Phase-2 (non-fatal on mismatch)
+    if args.resume_from:
+        _opt_state = rs.get("optimizer_state")
+        _opt_phase = rs.get("optimizer_phase", 1)
+        if _opt_state is not None and _opt_phase == 2:
+            try:
+                task._optimizer.load_state_dict(_opt_state)
+                print("[Resume] Phase 2 optimizer state restored (Adam momentum preserved).")
+            except Exception as e:
+                print(f"[Resume] WARNING: Could not restore Phase 2 optimizer state — {e}.")
+                print("[Resume] Starting with fresh Adam (training unaffected).")
+
     for epoch in range(1, phase2_epochs + 1):
         # Skip epochs already completed in a previous interrupted run
         if epoch <= _resume_p2_done:
             continue
 
-        # Continue GRL ramp from where Phase 1 left off
+        # Continue GRL ramp from where Phase 1 left off — does NOT reset the optimizer
         epoch_idx   = (phase1_epochs - 1) + epoch
         dann_lambda = compute_dann_lambda(epoch_idx, total_epochs, dann_lambda_max)
-        task.set_phase(2, lr=lr2, dann_weight=dann_weight, dann_lambda=dann_lambda)
+        task.backbone.set_dann_lambda(dann_lambda)
+        task.dann_weight = dann_weight
         history["dann_lambda"].append(round(dann_lambda, 6))
 
         t0 = time.time()

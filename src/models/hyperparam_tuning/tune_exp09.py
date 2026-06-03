@@ -198,10 +198,11 @@ def objective(trial, base_config: dict) -> float:
     task.eval()
     all_embs = []
     with torch.no_grad():
-        for batch in train_loader_p1:
-            view1 = batch[0].to(device)   # (B, 2, 128, 128)
-            z, _  = task.backbone(view1)
-            all_embs.append(z.cpu().numpy())
+        with torch.cuda.amp.autocast(enabled=task.use_amp):
+            for batch in train_loader_p1:
+                view1 = batch[0].to(device)   # (B, 2, 128, 128)
+                z, _  = task.backbone(view1)
+                all_embs.append(z.cpu().numpy())
     if not all_embs:
         raise RuntimeError("[Tune] No embeddings for K-Means.")
     task.init_cluster_centroids(np.concatenate(all_embs, axis=0))
