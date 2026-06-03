@@ -1,0 +1,115 @@
+# =============================================================================
+# Experiment Configuration: exp09_vit_dann
+# Model  : Custom Mini-ViT + Instance-SupCon + 4-Domain DANN (GRL) + Spherical DEC
+# Input  : 2-Channel Complex Bispectrum (Magnitude + Phase), 2×128×128
+# Task   : Phase 1 = Instance-Linked SupCon + Domain Adversarial Pre-Training
+#          Phase 2 = Spherical DEC Cluster Refinement + Pairwise + DANN
+#
+# KEY IMPROVEMENTS over Exp08
+# ----------------------------
+#   1. 2-channel bispectra (magnitude + phase) — captures phase-coupling fingerprint
+#      that is stable across sensor distances and sim/real gap.
+#   2. Cross-sensor positive pairing — view1 = Sensor A, view2 = Sensor B of the
+#      same physical event. Forces Distance-Invariant embeddings.
+#   3. 4-domain GRL (equation / synthesised / cwru / measured) — makes the
+#      backbone blind to ALL source-specific artifacts simultaneously.
+#   4. UMAP in inference — topology-preserving manifold reduction for HDBSCAN.
+#
+# IMPORTANT — Run extract_bispectra_v2.py FIRST to generate 2-channel shards:
+#   python src/features/extract_bispectra_v2.py \
+#       --input_dir data/raw/<source_dir> --parent_node_id <ID>
+#   Update the `path` fields below to the resulting output directories.
+#   Paths marked PLACEHOLDER_* must be replaced before training.
+# =============================================================================
+
+experiment:
+  name: "exp09_vit_dann_bispectrum"
+  description: >
+    ViT + Instance-SupCon + 4-Domain DANN (GRL) + 2-Channel Complex Bispectra.
+    Solves Latent Space Fragmentation via Physics Invariance (Magnitude+Phase),
+    Distance Invariance (cross-sensor pairing) and Domain Agnosticism (DANN).
+    DANN trained on equation, synthesised and measured, while SupCon/DEC  trained
+    on equation, synthesised, cwru and measured.
+  parent_node_id: "HEXZ"
+  task_type: "supcon_dec_dann_vit_bispectrum_v2"
+
+data:
+  sources:
+  - type: "equation"
+    path: "data/features/bispectra_v2/20260602_180138-sy-0s6o-o13c"
+    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    val_shards: [17, 18, 19, 20]
+  - type: "synthesised"
+    path: "data/features/bispectra_v2/20260602_182145-sy-1yGk-HEXZ"
+    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    val_shards: [17, 18, 19, 20]
+  - type: "measured"
+    path: "data/features/bispectra_v2/20260602_182024-ms-nQgf-3Uuj"
+    train_shards: [1, 2, 3]
+    val_shards: [4, 5]
+
+  max_pulse_len: 4096       # Reference only — not used for time-slicing in Exp09
+  label_fraction: 0.10      # 10% labels for semi-supervised pairwise constraints
+
+  # 4-domain map for DANN: source type → integer domain label.
+  # Missing source types receive domain_label = -1 (excluded from domain loss).
+  # The code handles any subset of 1–4 active source types gracefully.
+  # TAKE NOTE: Domain maps must be in ascending order without skipping any number.
+  # Labelling one as -1, means the next domain id should not skip 1 number. 
+  domain_map:
+    equation: -1      # Pure-math synthetic — no EM physics, clean analytic shape
+    synthesised: 0    # HFSS co-simulation — EM propagation + geometry artefacts
+    cwru: -1          # Bearing lab measurements — real hardware, different sensor
+    measured: 1       # UHF PD sensor — target domain, oscilloscope quantisation
+
+model:
+  in_channels: 2        # Magnitude (ch0) + Phase (ch1) bispectrum channels
+  image_size: 128       # Grid size after 129→128 crop
+  patch_size: 16        # ViT patch size; 128/16=8 patches/axis → 64 patch tokens
+  d_model: 384          # Transformer hidden dimension (ViT-Small)
+  nhead: 6              # Attention heads (384/6=64 per head)
+  depth: 6              # Transformer encoder blocks
+  embedding_dim: 128    # L2-normalised DEC/SupCon output dimension
+  n_clusters: 9        # PD classes to cluster
+  n_domains: 2          # Domain head output size (must match len(data.domain_map))
+
+task:
+  simclr_temperature: 0.5       # SupCon temperature τ. Lower = clusters are more separated.
+  dec_update_interval: 140      # Target-distribution update frequency (batches)
+  dec_tol: 0.001                # DEC convergence tolerance
+  pairwise_weight_gamma: 1.0    # Weight for pairwise must-link/cannot-link loss
+  dann_weight: 0.16559444         # Enabled domain-agnostic training
+  dann_lambda_max: 0.2           # Enabled GRL
+
+training:
+  device: "auto"               # "auto" → CUDA if available, else CPU
+  batch_size: 32
+  num_workers: 4               # Multiprocessing workers for DataLoader
+  use_amp: true                # Automatic Mixed Precision for Tensor Cores
+  phase1_epochs: 33            # Phase 1 default — see epoch advice below
+  phase2_epochs: 22            # Phase 2 default
+  epochs: 55                   # Total kept for config compatibility
+  learning_rate_phase1: 7.99851e-05 # Tuned by Optuna trial 0 (node zefe)
+  learning_rate_phase2: 7.90907e-05 # Tuned by Optuna trial 0 (node zefe)
+  tuned_at: "20260603_111656"              # Optuna completion timestamp
+  tuning_node_id: "XORC"
+  tuning_val_loss: 0.90058516
+
+  # --- Epoch guidance ---
+  # T4 GPU (Colab free):   ~30-40 min total  (estimate: ~40-50s/epoch)
+  # V100/A100 (Colab Pro): ~15-20 min total  (estimate: ~20-25s/epoch)
+  # GRL ramp needs Phase1 ≥ 20 epochs before lambda reaches 0.9× ceiling.
+  # Smoke-test override: 1+1 epochs, batch=4  (--smoke_test flag).
+
+output:
+  weights_dir: "models/weights"
+  config_snapshot_dir: "models/configuration_snapshots"
+  results_dir: "data/classification_output/exp09_dec"
+  eval_dir: "data/performance_evaluation/classification/exp09_dec"
+
+tune:
+  n_trials: 15
+  search_space:
+    learning_rate_phase1: [1.0e-5, 1.5e-4]   # Log-uniform
+    learning_rate_phase2: [1.0e-5, 1.5e-4]   # Log-uniform
+    dann_weight: [0.01, 0.5]                  # Log-uniform
