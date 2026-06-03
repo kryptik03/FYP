@@ -829,6 +829,11 @@ def main():
         print(f"[P1] Resuming from epoch {_resume_p1_done + 1} (best val so far: {best_val_loss_p1:.6f})")
     _init_dann_lambda = compute_dann_lambda(0, total_epochs, dann_lambda_max)
     task.set_phase(1, lr=lr1, dann_weight=dann_weight, dann_lambda=_init_dann_lambda)
+    
+    # Add LR warmup for Phase 1
+    warmup_epochs_p1 = min(5, phase1_epochs)
+    scheduler_p1 = torch.optim.lr_scheduler.LinearLR(task._optimizer, start_factor=0.01, total_iters=warmup_epochs_p1)
+    
     # Restore Adam momentum state if resuming mid-Phase-1 (non-fatal on mismatch)
     if args.resume_from:
         _opt_state  = rs.get("optimizer_state")
@@ -844,6 +849,7 @@ def main():
     for epoch in range(1, phase1_epochs + 1):
         # Skip epochs already completed in a previous interrupted run
         if epoch <= _resume_p1_done:
+            scheduler_p1.step()
             continue
 
         # GRL lambda ramp over the full training timeline — does NOT reset the optimizer
@@ -904,6 +910,9 @@ def main():
             best_epoch       = epoch
             task.save_checkpoint(epoch, node_id, weights_dir, config_snap_dir, config_path)
             print(f"    ^ Best P1 val SupCon: {best_val_loss_p1:.4f}")
+
+        # Step Phase 1 scheduler
+        scheduler_p1.step()
 
         # --- Periodic Google Drive backup + resume state save ---
         if gdrive_interval > 0 and epoch % gdrive_interval == 0:
@@ -999,6 +1008,11 @@ def main():
     # Initialise Phase 2 optimizer ONCE before the loop.
     _init_dann_lambda_p2 = compute_dann_lambda(phase1_epochs, total_epochs, dann_lambda_max)
     task.set_phase(2, lr=lr2, dann_weight=dann_weight, dann_lambda=_init_dann_lambda_p2)
+    
+    # Add LR warmup for Phase 2
+    warmup_epochs_p2 = min(3, phase2_epochs)
+    scheduler_p2 = torch.optim.lr_scheduler.LinearLR(task._optimizer, start_factor=0.1, total_iters=warmup_epochs_p2)
+    
     # Restore Adam momentum state if resuming mid-Phase-2 (non-fatal on mismatch)
     if args.resume_from:
         _opt_state = rs.get("optimizer_state")
@@ -1014,6 +1028,7 @@ def main():
     for epoch in range(1, phase2_epochs + 1):
         # Skip epochs already completed in a previous interrupted run
         if epoch <= _resume_p2_done:
+            scheduler_p2.step()
             continue
 
         # Continue GRL ramp from where Phase 1 left off — does NOT reset the optimizer
@@ -1080,6 +1095,9 @@ def main():
             best_epoch       = phase1_epochs + epoch
             task.save_checkpoint(best_epoch, node_id, weights_dir, config_snap_dir, config_path)
             print(f"    ^ Best P2 val DEC loss: {best_val_loss_p2:.4f}")
+
+        # Step Phase 2 scheduler
+        scheduler_p2.step()
 
         # --- Periodic Google Drive backup + resume state save ---
         if gdrive_interval > 0 and epoch % gdrive_interval == 0:

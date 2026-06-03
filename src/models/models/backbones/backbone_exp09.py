@@ -325,8 +325,10 @@ class DECViT_Exp09(nn.Module):
         #    Trained with CrossEntropyLoss; n_domains=4 for Exp09.
         # ------------------------------------------------------------------
         self.domain_head = nn.Sequential(
+            nn.Dropout(0.5),
             nn.Linear(d_model, 256),
             nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
             nn.Linear(256, n_domains),
         )
 

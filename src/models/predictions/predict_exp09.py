@@ -186,9 +186,9 @@ def load_model_from_checkpoint(
 
     task = SupConDECTask_Exp09(config).to(device)
     ckpt = torch.load(weight_path, map_location=device, weights_only=False)
-    task.load_state_dict(ckpt["model_state"])
+    task.load_state_dict(ckpt["model_state"], strict=False)
     task.eval()
-    print(f"[Checkpoint] Loaded → {weight_path}")
+    print(f"[Checkpoint] Loaded -> {weight_path}")
     print(f"             Saved at epoch : {ckpt.get('epoch', '?')}")
     print(f"             n_clusters     : {ckpt.get('n_clusters', '?')}")
     print(f"             n_domains      : {ckpt.get('n_domains', '?')}")

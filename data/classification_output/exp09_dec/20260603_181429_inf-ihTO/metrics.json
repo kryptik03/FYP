@@ -1,0 +1,15 @@
+{
+  "cls_accuracy": 0.6333,
+  "cls_f1_macro": 0.3907,
+  "grouping_f1": 0.0,
+  "silhouette": 0.8694,
+  "ari": 0.001,
+  "nmi": 0.0005,
+  "dec_entropy": 2.1063,
+  "n_clusters": 2,
+  "n_noise": 0,
+  "n_total": 15924,
+  "checkpoint_id": "ihTO",
+  "timestamp": "20260603_181429",
+  "n_sources": 1
+}

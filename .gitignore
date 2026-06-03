@@ -17,6 +17,7 @@ MATLAB/TDOA Localization code/TDOA Localization/Machine Learning (ML)/best_model
 /data/interim_measured/
 /src/ingestion/_csv_tmp/
 /.venv/
+models/weights/resume_*.pt
 
 # Python bytecode — never commit these
 __pycache__/

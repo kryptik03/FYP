@@ -61,10 +61,10 @@ data:
   # TAKE NOTE: Domain maps must be in ascending order without skipping any number.
   # Labelling one as -1, means the next domain id should not skip 1 number. 
   domain_map:
-    equation:    0    # Pure-math synthetic — no EM physics, clean analytic shape
-    synthesised: 1    # HFSS co-simulation — EM propagation + geometry artefacts
+    equation:    -1   # Pure-math synthetic — no EM physics, clean analytic shape
+    synthesised: 0    # HFSS co-simulation — EM propagation + geometry artefacts
     cwru:        -1   # Bearing lab measurements — real hardware, different sensor
-    measured:    2    # UHF PD sensor — target domain, oscilloscope quantisation
+    measured:    1    # UHF PD sensor — target domain, oscilloscope quantisation
 
 model:
   in_channels:   2      # Magnitude (ch0) + Phase (ch1) bispectrum channels
@@ -75,7 +75,7 @@ model:
   depth:         6      # Transformer encoder blocks
   embedding_dim: 128    # L2-normalised DEC/SupCon output dimension
   n_clusters:    10     # PD classes to cluster
-  n_domains:     3      # Domain head output size (must match len(data.domain_map))
+  n_domains:     2      # Domain head output size (must match len(data.domain_map))
 
 task:
   simclr_temperature:    0.5    # SupCon temperature τ. Lower = clusters are more separated.
@@ -83,16 +83,16 @@ task:
   dec_tol:               0.001  # DEC convergence tolerance
   pairwise_weight_gamma: 1.0    # Weight for pairwise must-link/cannot-link loss
   dann_weight:           0.0     # Disabled domain-agnostic training
-  dann_lambda_max:       0.0     # Disabled GRL
+  dann_lambda_max:       0.2     # Disabled GRL
 
 training:
   device:              "auto"  # "auto" → CUDA if available, else CPU
   batch_size:          32
   num_workers:         4       # Multiprocessing workers for DataLoader
   use_amp:             true    # Automatic Mixed Precision for Tensor Cores
-  phase1_epochs:       20      # Phase 1 default — see epoch advice below
-  phase2_epochs:       17      # Phase 2 default
-  epochs:              37      # Total kept for config compatibility
+  phase1_epochs:       33      # Phase 1 default — see epoch advice below
+  phase2_epochs:       22      # Phase 2 default
+  epochs:              55      # Total kept for config compatibility
   learning_rate_phase1: 2.3764e-4   # Tuned by Optuna trial 0 (node zefe)
   learning_rate_phase2: 1.0264e-5   # Tuned by Optuna trial 0 (node zefe)
   tuned_at:            "20260602_135446"   # Optuna completion timestamp
@@ -114,6 +114,6 @@ output:
 tune:
   n_trials: 15
   search_space:
-    learning_rate_phase1: [1.0e-5, 1.0e-3]   # Log-uniform
-    learning_rate_phase2: [1.0e-5, 1.0e-3]   # Log-uniform
-    # dann_weight:          [0.01,   1.0]       # Log-uniform
+    learning_rate_phase1: [1.0e-5, 1.5e-4]   # Log-uniform
+    learning_rate_phase2: [1.0e-5, 1.0e-4]   # Log-uniform
+    dann_weight:          [0.01,   0.5]       # Log-uniform
