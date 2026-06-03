@@ -240,8 +240,9 @@ def extract_features(
             time_res       = batch[6]              # (B,)
             actual_class   = batch[7]              # (B,)
 
-            z, domain_logit = task.backbone(sig)
-            q               = task.soft_assign(z)
+            with torch.cuda.amp.autocast(enabled=getattr(task, "use_amp", False)):
+                z, domain_logit = task.backbone(sig)
+                q               = task.soft_assign(z)
 
             all_embs.append(z.cpu().numpy())
             all_q.append(q.cpu().numpy())
@@ -746,7 +747,10 @@ def main():
     )
     print(f"[Data] Inference dataset: {len(infer_ds):,} pulses")
 
-    infer_loader = DataLoader(infer_ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
+    num_workers = config.get("training", {}).get("num_workers", 0)
+    pin_memory  = (device.type == "cuda")
+    infer_loader = DataLoader(infer_ds, batch_size=args.batch_size, shuffle=False, 
+                              num_workers=num_workers, pin_memory=pin_memory)
 
     # Load model
     weights_dir = os.path.abspath(config["output"]["weights_dir"])

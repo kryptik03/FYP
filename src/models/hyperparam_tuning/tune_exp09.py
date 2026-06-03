@@ -97,6 +97,10 @@ def build_loaders(cfg: dict):
     bs             = cfg["training"]["batch_size"]
     sources        = cfg["data"]["sources"]
     domain_map     = cfg["data"].get("domain_map", None)
+    num_workers    = cfg["training"].get("num_workers", 0)
+    pin_memory     = torch.cuda.is_available()
+
+    loader_kwargs  = dict(num_workers=num_workers, pin_memory=pin_memory)
 
     # Phase 1 train (cross-sensor pairing, augmented)
     train_ds_p1 = DECDataset_Exp09(
@@ -105,7 +109,8 @@ def build_loaders(cfg: dict):
         label_fraction=label_fraction, domain_map=domain_map,
     )
     train_ds_p1 = subset_dataset_evenly(train_ds_p1, TUNE_TRAIN_MAX_PER_SOURCE)
-    train_loader_p1 = DataLoader(train_ds_p1, batch_size=bs, shuffle=True, drop_last=True)
+    train_loader_p1 = DataLoader(train_ds_p1, batch_size=bs, shuffle=True,
+                                 drop_last=True, **loader_kwargs)
 
     # Phase 2 train (single signal, no augmentation)
     train_ds_p2 = DECDataset_Exp09(
@@ -114,7 +119,8 @@ def build_loaders(cfg: dict):
         label_fraction=label_fraction, domain_map=domain_map,
     )
     train_ds_p2 = subset_dataset_evenly(train_ds_p2, TUNE_TRAIN_MAX_PER_SOURCE)
-    train_loader_p2 = DataLoader(train_ds_p2, batch_size=bs, shuffle=True, drop_last=True)
+    train_loader_p2 = DataLoader(train_ds_p2, batch_size=bs, shuffle=True,
+                                 drop_last=True, **loader_kwargs)
 
     # Phase 1 val (augmented pairs for validation_step)
     val_ds_p1 = DECDataset_Exp09(
@@ -123,7 +129,7 @@ def build_loaders(cfg: dict):
         label_fraction=label_fraction, domain_map=domain_map,
     )
     val_ds_p1 = subset_dataset_evenly(val_ds_p1, TUNE_VAL_MAX_PER_SOURCE)
-    val_loader_p1 = DataLoader(val_ds_p1, batch_size=bs, shuffle=False)
+    val_loader_p1 = DataLoader(val_ds_p1, batch_size=bs, shuffle=False, **loader_kwargs)
 
     # Phase 2 val (single signal)
     val_ds_p2 = DECDataset_Exp09(
@@ -132,7 +138,7 @@ def build_loaders(cfg: dict):
         label_fraction=label_fraction, domain_map=domain_map,
     )
     val_ds_p2 = subset_dataset_evenly(val_ds_p2, TUNE_VAL_MAX_PER_SOURCE)
-    val_loader_p2 = DataLoader(val_ds_p2, batch_size=bs, shuffle=False)
+    val_loader_p2 = DataLoader(val_ds_p2, batch_size=bs, shuffle=False, **loader_kwargs)
 
     return train_loader_p1, train_loader_p2, val_loader_p1, val_loader_p2
 
