@@ -111,6 +111,14 @@ class SupConDECTask_Exp09(nn.Module):
 
         self._phase     = 1
         self._optimizer = None
+        
+        self.use_amp = config.get("training", {}).get("use_amp", False)
+        try:
+            self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        except RuntimeError:
+            # CUDA not available — AMP is a no-op on CPU regardless
+            self.use_amp = False
+            self.scaler  = torch.cuda.amp.GradScaler(enabled=False)
 
     # ======================================================================= #
     # Phase Management                                                         #
@@ -259,18 +267,22 @@ class SupConDECTask_Exp09(nn.Module):
 
         self._optimizer.zero_grad()
 
-        z1, d_logit1 = self.backbone(view1)   # z1:(B,128) d_logit1:(B,n_domains)
-        z2, d_logit2 = self.backbone(view2)
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            z1, d_logit1 = self.backbone(view1)   # z1:(B,128) d_logit1:(B,n_domains)
+            z2, d_logit2 = self.backbone(view2)
 
-        loss_supcon = self._instance_supcon_loss(z1, z2, global_inst_id)
+            loss_supcon = self._instance_supcon_loss(z1, z2, global_inst_id)
 
-        # Average domain logits from both views; both share the same source domain
-        d_logits_avg = (d_logit1 + d_logit2) / 2.0
-        loss_domain  = self._domain_loss(d_logits_avg, domain_label)
+            # Average domain logits from both views; both share the same source domain
+            d_logits_avg = (d_logit1 + d_logit2) / 2.0
+            loss_domain  = self._domain_loss(d_logits_avg, domain_label)
 
-        loss = loss_supcon + self.dann_weight * loss_domain
-        loss.backward()
-        self._optimizer.step()
+            loss = loss_supcon + self.dann_weight * loss_domain
+
+        self.scaler.scale(loss).backward()
+        self.scaler.unscale_(self._optimizer)   # unscale before grad-norm is read externally
+        self.scaler.step(self._optimizer)
+        self.scaler.update()
 
         return z1, {
             "total":  loss.item(),
@@ -365,17 +377,21 @@ class SupConDECTask_Exp09(nn.Module):
 
         self._optimizer.zero_grad()
 
-        z, domain_logit = self.backbone(signal)
-        q = self.soft_assign(z)
-        p = self.target_distribution(q)
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            z, domain_logit = self.backbone(signal)
+            q = self.soft_assign(z)
+            p = self.target_distribution(q)
 
-        loss_kl = F.kl_div(q.log(), p.detach(), reduction="batchmean")
-        loss_pw = self._pairwise_constraint_loss(q, reported_class)
-        loss_domain = self._domain_loss(domain_logit, domain_label)
+            loss_kl = F.kl_div(q.log(), p.detach(), reduction="batchmean")
+            loss_pw = self._pairwise_constraint_loss(q, reported_class)
+            loss_domain = self._domain_loss(domain_logit, domain_label)
 
-        loss = loss_kl + self.pairwise_weight_gamma * loss_pw + self.dann_weight * loss_domain
-        loss.backward()
-        self._optimizer.step()
+            loss = loss_kl + self.pairwise_weight_gamma * loss_pw + self.dann_weight * loss_domain
+            
+        self.scaler.scale(loss).backward()
+        self.scaler.unscale_(self._optimizer)   # unscale before grad-norm is read externally
+        self.scaler.step(self._optimizer)
+        self.scaler.update()
 
         return q, {
             "total":    loss.item(),
@@ -400,36 +416,37 @@ class SupConDECTask_Exp09(nn.Module):
         which is what we WANT. It is NOT used for checkpoint selection.
         """
         with torch.no_grad():
-            if self._phase == 1:
-                view1, view2 = batch[0], batch[1]
-                global_inst_id = batch[3]
-                domain_label   = batch[4]
-                z1, d_logit1 = self.backbone(view1)
-                z2, d_logit2 = self.backbone(view2)
-                loss_supcon  = self._instance_supcon_loss(z1, z2, global_inst_id)
-                d_logits_avg = (d_logit1 + d_logit2) / 2.0
-                loss_domain  = self._domain_loss(d_logits_avg, domain_label)
-                result = {
-                    "total":  (loss_supcon + self.dann_weight * loss_domain).item(),
-                    "supcon": loss_supcon.item(),
-                    "domain": loss_domain.item(),
-                }
-            else:
-                signal         = batch[0]
-                reported_class = batch[1]
-                domain_label   = batch[2]
-                z, domain_logit = self.backbone(signal)
-                q  = self.soft_assign(z)
-                p  = self.target_distribution(q)
-                loss_kl     = F.kl_div(q.log(), p.detach(), reduction="batchmean")
-                loss_pw     = self._pairwise_constraint_loss(q, reported_class)
-                loss_domain = self._domain_loss(domain_logit, domain_label)
-                result = {
-                    "total":    (loss_kl + self.pairwise_weight_gamma * loss_pw).item(),
-                    "kl_div":   loss_kl.item(),
-                    "pairwise": loss_pw.item(),
-                    "domain":   loss_domain.item(),
-                }
+            with torch.cuda.amp.autocast(enabled=self.use_amp):
+                if self._phase == 1:
+                    view1, view2 = batch[0], batch[1]
+                    global_inst_id = batch[3]
+                    domain_label   = batch[4]
+                    z1, d_logit1 = self.backbone(view1)
+                    z2, d_logit2 = self.backbone(view2)
+                    loss_supcon  = self._instance_supcon_loss(z1, z2, global_inst_id)
+                    d_logits_avg = (d_logit1 + d_logit2) / 2.0
+                    loss_domain  = self._domain_loss(d_logits_avg, domain_label)
+                    result = {
+                        "total":  (loss_supcon + self.dann_weight * loss_domain).item(),
+                        "supcon": loss_supcon.item(),
+                        "domain": loss_domain.item(),
+                    }
+                else:
+                    signal         = batch[0]
+                    reported_class = batch[1]
+                    domain_label   = batch[2]
+                    z, domain_logit = self.backbone(signal)
+                    q  = self.soft_assign(z)
+                    p  = self.target_distribution(q)
+                    loss_kl     = F.kl_div(q.log(), p.detach(), reduction="batchmean")
+                    loss_pw     = self._pairwise_constraint_loss(q, reported_class)
+                    loss_domain = self._domain_loss(domain_logit, domain_label)
+                    result = {
+                        "total":    (loss_kl + self.pairwise_weight_gamma * loss_pw).item(),
+                        "kl_div":   loss_kl.item(),
+                        "pairwise": loss_pw.item(),
+                        "domain":   loss_domain.item(),
+                    }
         return result
 
     # ======================================================================= #

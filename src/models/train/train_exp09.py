@@ -694,7 +694,8 @@ def main():
         domain_map     = domain_map,
     )
 
-    loader_kwargs = dict(num_workers=0, pin_memory=(device.type == "cuda"))
+    num_workers = train_cfg.get("num_workers", 0)
+    loader_kwargs = dict(num_workers=num_workers, pin_memory=(device.type == "cuda"))
     train_loader_p1 = DataLoader(train_ds_p1, batch_size=bs, shuffle=True,
                                  drop_last=True, **loader_kwargs)
     val_loader_p1   = DataLoader(val_ds_p1,   batch_size=bs, shuffle=False, **loader_kwargs)
