@@ -82,8 +82,8 @@ task:
   dec_update_interval:   140    # Target-distribution update frequency (batches)
   dec_tol:               0.001  # DEC convergence tolerance
   pairwise_weight_gamma: 1.0    # Weight for pairwise must-link/cannot-link loss
-  dann_weight:           0.0     # Disabled domain-agnostic training
-  dann_lambda_max:       0.2     # Disabled GRL
+  dann_weight:           0.05     # Enabled domain-agnostic training
+  dann_lambda_max:       0.2     # Enabled GRL
 
 training:
   device:              "auto"  # "auto" → CUDA if available, else CPU
@@ -115,5 +115,5 @@ tune:
   n_trials: 15
   search_space:
     learning_rate_phase1: [1.0e-5, 1.5e-4]   # Log-uniform
-    learning_rate_phase2: [1.0e-5, 1.0e-4]   # Log-uniform
+    learning_rate_phase2: [1.0e-5, 1.5e-4]   # Log-uniform
     dann_weight:          [0.01,   0.5]       # Log-uniform
