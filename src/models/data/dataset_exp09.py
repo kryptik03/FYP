@@ -302,13 +302,13 @@ class DECDataset_Exp09(Dataset):
         """
         Per-channel zero-mean, unit-variance normalisation for a (2, H, W) grid.
         Channel 0 (magnitude): normalised independently.
-        Channel 1 (phase):     normalised independently.
-        If std ≈ 0, only subtract the mean to avoid div-by-zero.
+        Channel 1 (phase):     left unchanged to preserve absolute radian phase relationships.
         """
         out = grid.copy()
-        for c in range(grid.shape[0]):
-            mu, std = grid[c].mean(), grid[c].std()
-            out[c]  = (grid[c] - mu) / std if std > 1e-9 else grid[c] - mu
+        # Normalise Magnitude ONLY (Channel 0)
+        mu, std = grid[0].mean(), grid[0].std()
+        out[0]  = (grid[0] - mu) / std if std > 1e-9 else grid[0] - mu
+        # Phase (Channel 1) remains untouched
         return out.astype(np.float32)
 
     def _read_bispectrum_v2(self, shard_path: str, pulse_idx: int) -> np.ndarray:
