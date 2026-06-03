@@ -35,10 +35,6 @@ experiment:
 
 data:
   sources:
-  - type: "cwru"
-    path: "data/features/bispectra_v2/20260602_175959-cw-TuKT-zu1m"
-    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
-    val_shards:   [14, 15, 16]
   - type: "equation"
     path: "data/features/bispectra_v2/20260602_180138-sy-0s6o-o13c"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
@@ -74,7 +70,7 @@ model:
   nhead:         6      # Attention heads (384/6=64 per head)
   depth:         6      # Transformer encoder blocks
   embedding_dim: 128    # L2-normalised DEC/SupCon output dimension
-  n_clusters:    10     # PD classes to cluster
+  n_clusters:    9     # PD classes to cluster
   n_domains:     2      # Domain head output size (must match len(data.domain_map))
 
 task:
