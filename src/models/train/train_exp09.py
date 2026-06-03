@@ -561,6 +561,22 @@ def main():
             "Example: --resume_from /content/drive/MyDrive/Colab_Intermediate_Training/resume_AbCd.pt"
         ),
     )
+    parser.add_argument(
+        "--skip_phase1", action="store_true",
+        help=(
+            "Skip Phase 1 entirely and jump straight to K-Means init + Phase 2. "
+            "Must be used together with --phase1_weights."
+        ),
+    )
+    parser.add_argument(
+        "--phase1_weights", type=str, default=None,
+        metavar="PATH",
+        help=(
+            "Path to a model_<node_id>.pt (best-checkpoint) to load as the "
+            "Phase 1 result when using --skip_phase1. "
+            "Example: --phase1_weights /content/drive/MyDrive/Colab_Intermediate_Training/model_aoiE.pt"
+        ),
+    )
     args = parser.parse_args()
 
     config_path = os.path.abspath(args.config)
@@ -747,6 +763,39 @@ def main():
         print(
             f"[Resume] Skipping P1 epochs 1-{_resume_p1_done}, "
             f"P2 epochs 1-{_resume_p2_done}.\n"
+        )
+    elif args.skip_phase1:
+        # ------------------------------------------------------------------
+        # Skip Phase 1: load best-checkpoint weights and jump to Phase 2
+        # ------------------------------------------------------------------
+        if not args.phase1_weights:
+            raise ValueError(
+                "[SkipP1] --skip_phase1 requires --phase1_weights PATH. "
+                "Point it at the model_<node_id>.pt file you want to use as the Phase 1 result."
+            )
+        p1w_path = args.phase1_weights
+        if not os.path.exists(p1w_path):
+            raise FileNotFoundError(f"[SkipP1] Weights file not found: {p1w_path}")
+
+        print(f"\n[SkipP1] === Skipping Phase 1 — loading weights from: {p1w_path} ===")
+        ckpt = torch.load(p1w_path, map_location=device, weights_only=False)
+
+        # model_<nodeid>.pt saves under the key 'model_state' (see task_exp09.py)
+        raw = ckpt.get("model_state", ckpt)   # fall back to raw state dict
+        task.load_state_dict(raw)
+
+        # Adopt the original node_id so lineage is preserved
+        if ckpt.get("node_id") and ckpt["node_id"] != node_id:
+            print(f"[SkipP1] Adopting original node_id {ckpt['node_id']} (discarding {node_id})")
+            node_id = ckpt["node_id"]
+
+        # Mark all P1 epochs as done so the P1 loop is skipped entirely
+        _resume_p1_done = phase1_epochs
+        history = _fresh_history   # fresh history (P1 curve will be empty, P2 will fill in)
+
+        print(
+            f"[SkipP1] Weights loaded. Phase 1 ({phase1_epochs} epochs) will be skipped.\n"
+            f"[SkipP1] Will proceed: K-Means init -> Phase 2 ({phase2_epochs} epochs)."
         )
     else:
         history = _fresh_history
