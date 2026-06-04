@@ -84,7 +84,7 @@ if _PROJECT_ROOT not in sys.path:
 
 from src.models.data.dataset_exp09 import DECDataset_Exp09
 from src.models.tasks.task_exp09   import SupConDECTask_Exp09
-from src.utils.lineage_tracker     import register_process
+from src.utils.lineage_tracker     import register_process, get_node_history
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +227,10 @@ def extract_features(
     all_shard_paths   = []
     all_pulse_idxs    = []
     all_time_res      = []
+    all_scene_idxs    = []
+    all_start_idxs    = []
+    
+    shard_labels_cache = {}
 
     task.eval()
     with torch.no_grad():
@@ -243,6 +247,17 @@ def extract_features(
             with torch.cuda.amp.autocast(enabled=getattr(task, "use_amp", False)):
                 z, domain_logit = task.backbone(sig)
                 q               = task.soft_assign(z)
+
+            for i in range(len(shard_path)):
+                s_path = shard_path[i]
+                p_idx  = pulse_idx[i].item()
+                if s_path not in shard_labels_cache:
+                    import h5py
+                    with h5py.File(s_path, "r") as f:
+                        shard_labels_cache[s_path] = f["labels"][:]
+                labels_arr = shard_labels_cache[s_path]
+                all_scene_idxs.append(int(labels_arr[0, p_idx]))
+                all_start_idxs.append(int(labels_arr[5, p_idx]))
 
             all_embs.append(z.cpu().numpy())
             all_q.append(q.cpu().numpy())
@@ -262,8 +277,10 @@ def extract_features(
         "domain_labels":    np.array(all_domain_labels, dtype=np.int32),
         "reported_classes": np.array(all_reported,      dtype=np.int32),
         "shard_paths":      all_shard_paths,
-        "pulse_idxs":       np.array(all_pulse_idxs,    dtype=np.int32),
-        "time_res_arr":     np.array(all_time_res,       dtype=np.float32),
+        "pulse_idxs":       np.array(all_pulse_idxs,          dtype=np.int32),
+        "scene_idxs":       np.array(all_scene_idxs,          dtype=np.int32),
+        "start_idxs":       np.array(all_start_idxs,          dtype=np.int32),
+        "time_res_arr":     np.array(all_time_res,            dtype=np.float32) if all_time_res else np.array([]),
     }
 
 
@@ -271,9 +288,9 @@ def extract_features(
 # UMAP Projection
 # ---------------------------------------------------------------------------
 
-def umap_2d(embs: np.ndarray) -> np.ndarray:
+def umap_nd(embs: np.ndarray, n_components: int = 2) -> np.ndarray:
     """
-    Reduce embeddings to 2D using UMAP with cosine metric.
+    Reduce embeddings to n_components using UMAP with cosine metric.
 
     Why UMAP over t-SNE:
     - Preserves global topological structure (manifold fidelity).
@@ -287,10 +304,10 @@ def umap_2d(embs: np.ndarray) -> np.ndarray:
         raise ImportError(
             "umap-learn is required. Install via: pip install umap-learn"
         )
-    print(f"[UMAP] Reducing {len(embs):,} × {embs.shape[1]}-D embeddings to 2D...")
+    print(f"[UMAP] Reducing {len(embs):,} × {embs.shape[1]}-D embeddings to {n_components}D...")
     t0 = time.time()
     reducer = umap.UMAP(
-        n_components=2,
+        n_components=n_components,
         n_neighbors=15,
         min_dist=0.1,
         metric="cosine",   # L2-normalised → cosine is the natural metric
@@ -364,45 +381,64 @@ def align_clusters_to_classes(
 # Instance Grouping
 # ---------------------------------------------------------------------------
 
-def group_by_instance(
-    pulse_idxs:    np.ndarray,
+def group_pd_instances(
+    embs:           np.ndarray,
     pred_class_ids: np.ndarray,
-    shard_paths:   list,
-    dataset:       DECDataset_Exp09,
-) -> tuple[np.ndarray, np.ndarray]:
+    shard_paths:    list,
+    scene_idxs:     np.ndarray,
+    start_idxs:     np.ndarray,
+    time_res_arr:   np.ndarray,
+    time_th:        float = 1e-5,
+    dist_th:        float = 0.5,
+) -> tuple[np.ndarray, dict]:
     """
-    Assign a predicted instance class by majority vote over all sensors
-    that observed the same physical event (same Pulse_Instance_ID).
-    Returns (gt_inst_ids, pred_inst_ids).
+    Groups pulses that occur closely in time (within time_th seconds)
+    and in embedding space (Euclidean distance < dist_th), and computes 
+    majority-vote predicted classes.
 
-    NOTE: DataLoader(shuffle=False) preserves dataset.index insertion order,
-    so result index i corresponds directly to dataset.index[i].
-    This gives an O(N) lookup instead of an O(N²) scan.
+    Returns:
+        (pred_inst_ids, inst_majority_class)
     """
-    n = len(pulse_idxs)
-    gt_inst_ids   = np.full(n, -1, dtype=np.int32)
+    n = len(embs)
     pred_inst_ids = np.full(n, -1, dtype=np.int32)
-
-    # Group flat indices by global_inst_id — O(N) direct lookup
+    
     from collections import defaultdict
-    group: dict[int, list[int]] = defaultdict(list)
-
+    scene_groups = defaultdict(list)
     for i in range(n):
-        entry = dataset.index[i]   # (shard_path, pulse_idx, reported_class, actual_class,
-                                   #  global_inst_id, time_res, domain_label)
-        gid = entry[4]             # global_inst_id
-        gt_inst_ids[i] = gid
-        group[gid].append(i)
+        scene_groups[(shard_paths[i], scene_idxs[i])].append(i)
 
-    for gid, idxs in group.items():
-        preds = pred_class_ids[idxs]
-        preds = preds[preds >= 0]
+    assigned_global = {}
+    inst_counter = 0
+
+    for pulses_idxs in scene_groups.values():
+        for i in pulses_idxs:
+            if i in assigned_global:
+                continue
+            inst_counter += 1
+            assigned_global[i] = inst_counter
+            t_i = start_idxs[i] * time_res_arr[i]
+            
+            for j in pulses_idxs:
+                if j == i or j in assigned_global:
+                    continue
+                t_j = start_idxs[j] * time_res_arr[j]
+                if abs(t_i - t_j) > time_th:
+                    continue
+                if np.linalg.norm(embs[i] - embs[j]) < dist_th:
+                    assigned_global[j] = inst_counter
+
+    inst_majority = {}
+    inst_to_preds = defaultdict(list)
+    for i, inst_id in assigned_global.items():
+        pred_inst_ids[i] = inst_id
+        if pred_class_ids[i] >= 0:
+            inst_to_preds[inst_id].append(pred_class_ids[i])
+
+    for inst_id, preds in inst_to_preds.items():
         if len(preds) > 0:
-            majority = int(np.bincount(preds).argmax())
-            for i in idxs:
-                pred_inst_ids[i] = majority
+            inst_majority[inst_id] = int(np.bincount(preds).argmax())
 
-    return gt_inst_ids, pred_inst_ids
+    return pred_inst_ids, inst_majority
 
 
 
@@ -418,11 +454,14 @@ def compute_metrics(
     embs:           np.ndarray,
     cluster_ids:    np.ndarray,
     q_soft:         np.ndarray,
+    shard_paths:    list,
+    scene_idxs:     np.ndarray,
 ) -> dict:
     from sklearn.metrics import (
         accuracy_score, f1_score, silhouette_score,
         adjusted_rand_score, normalized_mutual_info_score,
     )
+    from collections import defaultdict
 
     valid_mask    = (pred_class_ids >= 0) & (gt_class_ids >= 0)
     gt_v          = gt_class_ids[valid_mask]
@@ -441,13 +480,40 @@ def compute_metrics(
     else:
         sil = float("nan")
 
-    # Instance grouping F1
-    inst_valid = (pred_inst_ids >= 0) & (gt_inst_ids >= 0)
-    gi, pi     = gt_inst_ids[inst_valid], pred_inst_ids[inst_valid]
-    group_f1   = f1_score(gi, pi, average="macro", zero_division=0) if len(gi) > 0 else 0.0
+    # Pairwise Instance grouping F1
+    tp = total_gt = total_pred = 0
+    scenes = defaultdict(list)
+    for i in range(len(embs)):
+        scenes[(shard_paths[i], scene_idxs[i])].append(i)
+        
+    for pulses in scenes.values():
+        n = len(pulses)
+        for i in range(n):
+            for j in range(i + 1, n):
+                idx_i, idx_j = pulses[i], pulses[j]
+                if gt_inst_ids[idx_i] == -1 or gt_inst_ids[idx_j] == -1: continue
+                gs = gt_inst_ids[idx_i]   == gt_inst_ids[idx_j]
+                ps = pred_inst_ids[idx_i] == pred_inst_ids[idx_j]
+                if gs: total_gt += 1
+                if ps: total_pred += 1
+                if gs and ps: tp += 1
+
+    prec = tp / total_pred if total_pred > 0 else 1.0
+    rec  = tp / total_gt   if total_gt   > 0 else 1.0
+    group_f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
 
     # DEC entropy (lower = more confident clusters)
     entropy = float(-np.mean(np.sum(q_soft * np.log(q_soft + 1e-9), axis=1)))
+
+    class_stats = {}
+    for cid in sorted(set(gt_class_ids)):
+        mask = gt_class_ids == cid
+        class_acc = float((gt_class_ids[mask] == pred_class_ids[mask]).mean()) if mask.sum() > 0 else 0.0
+        class_stats[int(cid)] = {
+            "name":  CLASS_NAMES.get(int(cid), f"Class {cid}"),
+            "count": int(mask.sum()),
+            "accuracy": round(class_acc, 4),
+        }
 
     return {
         "cls_accuracy":  round(cls_acc,  4),
@@ -460,6 +526,7 @@ def compute_metrics(
         "n_clusters":    int(len(np.unique(cluster_ids[cluster_ids >= 0]))),
         "n_noise":       int((cluster_ids == -1).sum()),
         "n_total":       int(len(cluster_ids)),
+        "per_class_stats": class_stats,
     }
 
 
@@ -709,6 +776,14 @@ def main():
     parser.add_argument("--min_cluster_size", type=int, default=30)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--reduce_method", type=str, default="umap", choices=["none", "umap"],
+                        help="Method to reduce embeddings before HDBSCAN.")
+    parser.add_argument("--reduce_dims", type=int, default=2,
+                        help="Number of dimensions for dimensionality reduction (if method is umap).")
+    parser.add_argument("--time_threshold", type=float, default=1e-5,
+                        help="Max time diff (s) to group pulses from different sensors.")
+    parser.add_argument("--dist_threshold", type=float, default=0.5,
+                        help="Max embedding distance to group pulses from different sensors.")
     args = parser.parse_args()
 
     config_path = os.path.abspath(args.config)
@@ -725,7 +800,8 @@ def main():
     results_dir = os.path.abspath(config["output"].get("results_dir", "data/classification_output/exp09_dec"))
     node_id     = args.checkpoint_id
     run_ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir     = os.path.join(results_dir, f"{run_ts}_inf-{node_id}")
+    inf_id      = "".join(random.choices(string.ascii_letters + string.digits, k=4))
+    out_dir     = os.path.join(results_dir, f"{run_ts}_inf-{node_id}-{inf_id}")
     os.makedirs(out_dir, exist_ok=True)
     print(f"[Output] {out_dir}")
 
@@ -765,11 +841,19 @@ def main():
     embs    = results["embs"]
     print(f"[Inference] {len(embs):,} embeddings in {time.time()-t0:.1f}s")
 
-    # UMAP
-    xy = umap_2d(embs)
+    # Dimensionality reduction for clustering
+    if args.reduce_method == "umap":
+        if args.reduce_dims == 2:
+            xy_cluster = xy_plot = umap_nd(embs, n_components=2)
+        else:
+            xy_cluster = umap_nd(embs, n_components=args.reduce_dims)
+            xy_plot    = umap_nd(embs, n_components=2)
+    else:
+        xy_cluster = embs
+        xy_plot    = umap_nd(embs, n_components=2)
 
     # HDBSCAN
-    cluster_ids = hdbscan_cluster(xy, min_cluster_size=args.min_cluster_size)
+    cluster_ids = hdbscan_cluster(xy_cluster, min_cluster_size=args.min_cluster_size)
 
     # Alignment
     n_classes      = max(int(results["gt_class_ids"].max()) + 1, len(CLASS_NAMES))
@@ -777,22 +861,55 @@ def main():
         cluster_ids, results["gt_class_ids"], n_classes
     )
 
-    # Instance grouping
-    print("[Grouping] Computing per-instance majority-vote prediction...")
-    gt_inst_ids, pred_inst_ids = group_by_instance(
-        results["pulse_idxs"], pred_class_ids, results["shard_paths"], infer_ds
+    # Instance Grouping
+    print("[Grouping] Computing per-instance majority-vote prediction with heuristics...")
+    gt_inst_ids = np.array([entry[4] for entry in infer_ds.index], dtype=np.int32)
+    pred_inst_ids, inst_majority = group_pd_instances(
+        embs           = results["embs"],
+        pred_class_ids = pred_class_ids,
+        shard_paths    = results["shard_paths"],
+        scene_idxs     = results["scene_idxs"],
+        start_idxs     = results["start_idxs"],
+        time_res_arr   = results["time_res_arr"],
+        time_th        = args.time_threshold,
+        dist_th        = args.dist_threshold,
     )
+    
+    # Overwrite pulse-level predictions with their instance-level majority vote
+    for i in range(len(pred_class_ids)):
+        if pred_inst_ids[i] in inst_majority:
+            pred_class_ids[i] = inst_majority[pred_inst_ids[i]]
 
     # Metrics
     print("[Metrics] Computing...")
     metrics = compute_metrics(
-        results["gt_class_ids"], pred_class_ids,
-        pred_inst_ids, gt_inst_ids,
-        embs, cluster_ids, results["q_soft"],
+        gt_class_ids   = results["gt_class_ids"],
+        pred_class_ids = pred_class_ids,
+        pred_inst_ids  = pred_inst_ids,
+        gt_inst_ids    = gt_inst_ids,
+        embs           = results["embs"],
+        cluster_ids    = cluster_ids,
+        q_soft         = results["q_soft"],
+        shard_paths    = results["shard_paths"],
+        scene_idxs     = results["scene_idxs"],
     )
+    
+    metrics.update({
+        "checkpoint_id": args.checkpoint_id,
+        "reduce_method": args.reduce_method,
+        "reduce_dims":   args.reduce_dims,
+        "time_threshold": args.time_threshold,
+        "dist_threshold": args.dist_threshold,
+    })
+
     print("\n[Metrics]")
     for k, v in metrics.items():
-        print(f"  {k}: {v}")
+        if k != "per_class_stats":
+            print(f"  {k}: {v}")
+            
+    print("\n[Per-Class Accuracy]")
+    for cid, stat in metrics["per_class_stats"].items():
+        print(f"  {stat['name']:30s}  n={stat['count']:5d}  acc={stat['accuracy']:.4f}")
 
     # Save metrics
     metrics["checkpoint_id"] = node_id
@@ -810,9 +927,9 @@ def main():
 
     # Plots
     print("[Plots] Generating...")
-    plot_umap_by_class(xy, results["gt_class_ids"],
+    plot_umap_by_class(xy_plot, results["gt_class_ids"],
                        os.path.join(out_dir, "fig1_umap_by_class.png"))
-    plot_umap_by_domain(xy, results["domain_labels"],
+    plot_umap_by_domain(xy_plot, results["domain_labels"],
                         os.path.join(out_dir, "fig2_umap_by_domain.png"))
     plot_cluster_composition(cluster_ids, results["gt_class_ids"], n_classes,
                              os.path.join(out_dir, "fig3_cluster_composition.png"))
@@ -820,10 +937,8 @@ def main():
                         os.path.join(out_dir, "fig4_soft_q_heatmap.png"))
 
     # Lineage
-    parent_id = config["experiment"].get("parent_node_id", "NONE")
-    inf_node  = "".join(random.choices(string.ascii_letters + string.digits, k=4))
     register_process(
-        parent_id        = parent_id,
+        parent_id        = node_id,
         stage            = "inference",
         method           = "dann_vit_umap_hdbscan_exp09",
         folder_path      = out_dir,
@@ -834,9 +949,12 @@ def main():
             f"silhouette={metrics.get('silhouette')}, "
             f"n_clusters={metrics['n_clusters']}."
         ),
-        force_node_id = inf_node,
+        force_node_id = inf_id,
     )
-    print(f"[Lineage] Inference node registered: {inf_node}")
+    print(f"[Lineage] Inference node registered: {inf_id}")
+
+    with open(os.path.join(out_dir, "analysis_history.txt"), "w") as f:
+        f.write(get_node_history(inf_id))
 
     print(f"\n[Done] All outputs → {out_dir}")
     print(f"  fig2_umap_by_domain.png — check for domain overlap (DANN quality)")

@@ -1,0 +1,31 @@
+{
+  "cls_accuracy": 0.8298,
+  "cls_f1_macro": 0.8193,
+  "grouping_f1": 0.5368,
+  "silhouette": 0.9969,
+  "ari": 0.4324,
+  "nmi": 0.3219,
+  "dec_entropy": 2.0212,
+  "n_clusters": 2,
+  "n_noise": 18,
+  "n_total": 15924,
+  "per_class_stats": {
+    "3": {
+      "name": "Incision Meas",
+      "count": 5844,
+      "accuracy": 0.8008
+    },
+    "4": {
+      "name": "Delamination",
+      "count": 10080,
+      "accuracy": 0.8451
+    }
+  },
+  "checkpoint_id": "k7vt",
+  "reduce_method": "none",
+  "reduce_dims": 2,
+  "time_threshold": 1e-05,
+  "dist_threshold": 0.5,
+  "timestamp": "20260604_000718",
+  "n_sources": 1
+}

@@ -33,34 +33,34 @@ ARCHITECTURE OVERVIEW
 ----------------------
               ┌───────────────────────────────────────┐
  Input        │  (B, 2, 128, 128)  ← Magnitude+Phase  │
- Bispectrum   │  2-channel bispectrum (after 129→128)  │
+ Bispectrum   │  2-channel bispectrum (after 129→128) │
               └──────────────────┬────────────────────┘
                                  │
               ┌──────────────────▼────────────────────┐
- Patch        │  Conv2d(2, d_model, 16×16, stride=16)  │
- Embedding    │  → (B, 64, d_model)                    │
+ Patch        │  Conv2d(2, d_model, 16×16, stride=16) │
+ Embedding    │  → (B, 64, d_model)                   │
               └──────────────────┬────────────────────┘
                                  │
               ┌──────────────────▼────────────────────┐
- [CLS]+Pos    │  Prepend CLS token + positional embed  │
- Embedding    │  → (B, 65, d_model)                    │
+ [CLS]+Pos    │  Prepend CLS token + positional embed │
+ Embedding    │  → (B, 65, d_model)                   │
               └──────────────────┬────────────────────┘
                                  │
               ┌──────────────────▼────────────────────┐
- Transformer  │  N=6 Pre-LN TransformerBlock layers    │
- Encoder      │  d_model=384, nhead=6                  │
+ Transformer  │  N=6 Pre-LN TransformerBlock layers   │
+ Encoder      │  d_model=384, nhead=6                 │
               └──────────────────┬────────────────────┘
                                  │ [CLS] token → (B, 384)
               ┌──────────────────┴──────────────────┐
               │                                     │
     ┌─────────▼─────────┐              ┌────────────▼────────────┐
-    │ Projector Head     │              │ GRL (λ)  ← reversed grad│
+    │ Projector Head    │              │ GRL (λ)  ← reversed grad│
     │ Linear→ReLU→Linear│              │ Domain Head (4 logits)  │
-    │ → (B, 128)         │              │ → (B, n_domains)        │
-    │ L2-normalised      │              └─────────────────────────┘
-    └────────────────────┘
-         z (embedding)                      domain_logit
-         for SupCon + DEC                   for CrossEntropyLoss
+    │ → (B, 128)        │              │ → (B, n_domains)        │
+    │ L2-normalised     │              └─────────────────────────┘
+    └───────────────────┘
+        z (embedding)                       domain_logit
+        for SupCon + DEC                    for CrossEntropyLoss
 """
 
 import math
