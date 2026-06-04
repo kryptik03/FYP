@@ -63,12 +63,12 @@ training:
   phase1_epochs: 20       # Default Phase 1 epochs (overridable interactively at runtime)
   phase2_epochs: 15       # Default Phase 2 epochs (overridable interactively at runtime)
   epochs: 35              # Total (kept for config compatibility)
-  learning_rate_phase1: 9.40578e-05 # Will be tuned by tune_exp08.py
-  learning_rate_phase2: 0.0005950533 # Will be tuned by tune_exp08.py
+  learning_rate_phase1: 0.0003597398 # Will be tuned by tune_exp08.py
+  learning_rate_phase2: 2.97377e-05  # Will be tuned by tune_exp08.py
 
-  tuned_at: '20260530_154915'
-  tuning_node_id: Ku9m
-  tuning_val_loss: 1.22786934
+  tuned_at: '20260604_162914'
+  tuning_node_id: X17P
+  tuning_val_loss: 0.7981293
 output:
   weights_dir: "models/weights"
   config_snapshot_dir: "models/configuration_snapshots"
