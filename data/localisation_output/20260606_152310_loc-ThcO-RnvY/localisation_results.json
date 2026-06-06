@@ -1,0 +1,32 @@
+[
+    {
+        "cluster_id": 0,
+        "pred_class_id": 3,
+        "gt_class_id": 3,
+        "num_valid_instances": 263,
+        "avg_compute_time_per_inst": 0.714,
+        "est_x": 1.599536083427968,
+        "est_y": 5.396583336617477,
+        "est_z": 1.3395904795893974,
+        "true_x": 3.7,
+        "true_y": 7.0,
+        "true_z": 0.1,
+        "error_m": 2.9188,
+        "error_pct": 138.72
+    },
+    {
+        "cluster_id": 2,
+        "pred_class_id": 4,
+        "gt_class_id": 4,
+        "num_valid_instances": 343,
+        "avg_compute_time_per_inst": 0.657,
+        "est_x": 1.5248518625889638,
+        "est_y": 8.688730014711055,
+        "est_z": 1.2644734934501942,
+        "true_x": 3.7,
+        "true_y": 7.0,
+        "true_z": 0.1,
+        "error_m": 2.9898,
+        "error_pct": 102.6805
+    }
+]

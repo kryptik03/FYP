@@ -59,6 +59,8 @@ import sqlite3
 import string
 import sys
 import time
+import warnings
+warnings.filterwarnings("ignore", message="Tight layout not applied")
 from datetime import datetime
 
 import h5py
@@ -228,8 +230,9 @@ def extract_features(
     all_pulse_idxs    = []
     all_time_res      = []
     all_scene_idxs    = []
+    all_ch_idxs       = []
     all_start_idxs    = []
-    
+
     shard_labels_cache = {}
 
     task.eval()
@@ -257,6 +260,7 @@ def extract_features(
                         shard_labels_cache[s_path] = f["labels"][:]
                 labels_arr = shard_labels_cache[s_path]
                 all_scene_idxs.append(int(labels_arr[0, p_idx]))
+                all_ch_idxs.append(int(labels_arr[1, p_idx]))
                 all_start_idxs.append(int(labels_arr[5, p_idx]))
 
             all_embs.append(z.cpu().numpy())
@@ -279,6 +283,7 @@ def extract_features(
         "shard_paths":      all_shard_paths,
         "pulse_idxs":       np.array(all_pulse_idxs,          dtype=np.int32),
         "scene_idxs":       np.array(all_scene_idxs,          dtype=np.int32),
+        "ch_idxs":          np.array(all_ch_idxs,             dtype=np.int32),
         "start_idxs":       np.array(all_start_idxs,          dtype=np.int32),
         "time_res_arr":     np.array(all_time_res,            dtype=np.float32) if all_time_res else np.array([]),
     }
@@ -390,24 +395,35 @@ def group_pd_instances(
     time_res_arr:   np.ndarray,
     time_th:        float = 1e-5,
     dist_th:        float = 0.5,
+    mode:           str   = "greedy",
+    ch_idxs:        np.ndarray = None,
 ) -> tuple[np.ndarray, dict]:
     """
     Groups pulses that occur closely in time (within time_th seconds)
-    and in embedding space (Euclidean distance < dist_th), and computes 
+    and in embedding space (Euclidean distance < dist_th), and computes
     majority-vote predicted classes.
 
-    Returns:
-        (pred_inst_ids, inst_majority_class)
+    Parameters
+    ----------
+    mode : 'greedy' or 'channel_capped'.
+        greedy        : Any unassigned pulse within both thresholds joins the instance.
+        channel_capped: At most one pulse per channel (max 4 per instance). Among
+                        multiple candidates on the same channel, the one with the
+                        smallest L2 embedding distance to the seed is chosen.
+                        Requires ch_idxs to be provided.
+
+    Returns
+    -------
+    (pred_inst_ids, inst_majority_class)
     """
     n = len(embs)
     pred_inst_ids = np.full(n, -1, dtype=np.int32)
-    
-    from collections import defaultdict
+
     scene_groups = defaultdict(list)
     for i in range(n):
         scene_groups[(shard_paths[i], scene_idxs[i])].append(i)
 
-    assigned_global = {}
+    assigned_global: dict = {}
     inst_counter = 0
 
     for pulses_idxs in scene_groups.values():
@@ -417,18 +433,37 @@ def group_pd_instances(
             inst_counter += 1
             assigned_global[i] = inst_counter
             t_i = start_idxs[i] * time_res_arr[i]
-            
-            for j in pulses_idxs:
-                if j == i or j in assigned_global:
-                    continue
-                t_j = start_idxs[j] * time_res_arr[j]
-                if abs(t_i - t_j) > time_th:
-                    continue
-                if np.linalg.norm(embs[i] - embs[j]) < dist_th:
-                    assigned_global[j] = inst_counter
 
-    inst_majority = {}
-    inst_to_preds = defaultdict(list)
+            if mode == "greedy":
+                for j in pulses_idxs:
+                    if j == i or j in assigned_global:
+                        continue
+                    t_j = start_idxs[j] * time_res_arr[j]
+                    if abs(t_i - t_j) > time_th:
+                        continue
+                    if np.linalg.norm(embs[i] - embs[j]) < dist_th:
+                        assigned_global[j] = inst_counter
+
+            elif mode == "channel_capped" and ch_idxs is not None:
+                seed_ch = int(ch_idxs[i])
+                by_channel: dict = defaultdict(list)  # ch -> [(j, dist), ...]
+                for j in pulses_idxs:
+                    if j == i or j in assigned_global:
+                        continue
+                    t_j = start_idxs[j] * time_res_arr[j]
+                    if abs(t_i - t_j) > time_th:
+                        continue
+                    d = float(np.linalg.norm(embs[i] - embs[j]))
+                    if d < dist_th:
+                        by_channel[int(ch_idxs[j])].append((j, d))
+                for ch, candidates in by_channel.items():
+                    if ch == seed_ch:
+                        continue  # seed already occupies this channel slot
+                    best_j = min(candidates, key=lambda x: x[1])[0]
+                    assigned_global[best_j] = inst_counter
+
+    inst_majority: dict = {}
+    inst_to_preds: dict = defaultdict(list)
     for i, inst_id in assigned_global.items():
         pred_inst_ids[i] = inst_id
         if pred_class_ids[i] >= 0:
@@ -447,32 +482,39 @@ def group_pd_instances(
 # ---------------------------------------------------------------------------
 
 def compute_metrics(
-    gt_class_ids:   np.ndarray,
-    pred_class_ids: np.ndarray,
-    pred_inst_ids:  np.ndarray,
-    gt_inst_ids:    np.ndarray,
-    embs:           np.ndarray,
-    cluster_ids:    np.ndarray,
-    q_soft:         np.ndarray,
-    shard_paths:    list,
-    scene_idxs:     np.ndarray,
+    gt_class_ids:    np.ndarray,
+    pred_class_ids:  np.ndarray,
+    pred_inst_ids:   np.ndarray,
+    gt_inst_ids:     np.ndarray,
+    embs:            np.ndarray,
+    cluster_ids:     np.ndarray,
+    q_soft:          np.ndarray,
+    shard_paths:     list,
+    scene_idxs:      np.ndarray,
+    class_scores:    np.ndarray = None,
+    inference_time_s: float = 0.0,
+    reduce_time_s:    float = 0.0,
+    hdbscan_time_s:   float = 0.0
 ) -> dict:
     from sklearn.metrics import (
         accuracy_score, f1_score, silhouette_score,
         adjusted_rand_score, normalized_mutual_info_score,
+        precision_recall_fscore_support,
+        davies_bouldin_score, calinski_harabasz_score,
+        roc_auc_score,
     )
-    from collections import defaultdict
 
-    valid_mask    = (pred_class_ids >= 0) & (gt_class_ids >= 0)
-    gt_v          = gt_class_ids[valid_mask]
-    pred_v        = pred_class_ids[valid_mask]
+    valid_mask = (pred_class_ids >= 0) & (gt_class_ids >= 0)
+    gt_v       = gt_class_ids[valid_mask]
+    pred_v     = pred_class_ids[valid_mask]
 
-    cls_acc  = accuracy_score(gt_v, pred_v) if len(gt_v) > 0 else 0.0
-    cls_f1   = f1_score(gt_v, pred_v, average="macro", zero_division=0) if len(gt_v) > 0 else 0.0
-    ari      = adjusted_rand_score(gt_class_ids, cluster_ids)
-    nmi      = normalized_mutual_info_score(gt_class_ids, cluster_ids)
+    cls_acc         = float(accuracy_score(gt_v, pred_v)) if len(gt_v) > 0 else 0.0
+    cls_f1_macro    = float(f1_score(gt_v, pred_v, average="macro",    zero_division=0)) if len(gt_v) > 0 else 0.0
+    cls_f1_weighted = float(f1_score(gt_v, pred_v, average="weighted", zero_division=0)) if len(gt_v) > 0 else 0.0
+    ari             = float(adjusted_rand_score(gt_class_ids, cluster_ids))
+    nmi             = float(normalized_mutual_info_score(gt_class_ids, cluster_ids))
 
-    # Silhouette on embeddings
+    # Silhouette on cosine-metric embeddings (UMAP-aligned)
     uc = np.unique(cluster_ids[cluster_ids >= 0])
     if len(uc) > 1:
         sil_mask = cluster_ids >= 0
@@ -480,53 +522,124 @@ def compute_metrics(
     else:
         sil = float("nan")
 
+    # Davies-Bouldin & Calinski-Harabasz (Euclidean, non-noise only)
+    dbi = float("nan")
+    chi = float("nan")
+    if len(uc) > 1:
+        sil_mask = cluster_ids >= 0
+        try:
+            dbi = float(davies_bouldin_score(embs[sil_mask], cluster_ids[sil_mask]))
+            chi = float(calinski_harabasz_score(embs[sil_mask], cluster_ids[sil_mask]))
+        except Exception:
+            pass
+
+    # Cluster purity
+    purity_num, purity_den = 0, 0
+    for lbl in uc:
+        mask = cluster_ids == lbl
+        if mask.sum() == 0:
+            continue
+        dominant    = int(np.bincount(gt_class_ids[mask].astype(int)).max())
+        purity_num += dominant
+        purity_den += int(mask.sum())
+    cluster_purity = purity_num / purity_den if purity_den > 0 else 0.0
+
+    # AUC ROC (macro, one-vs-rest)
+    auc_roc_macro  = float("nan")
+    unique_classes = np.unique(gt_class_ids[gt_class_ids >= 0])
+    n_cls = class_scores.shape[1] if class_scores is not None else 0
+    if class_scores is not None and len(unique_classes) >= 2 and n_cls >= 2:
+        try:
+            labels_present = [int(c) for c in unique_classes if c < n_cls]
+            cs_sub = class_scores[:, labels_present].copy()
+            rs = cs_sub.sum(axis=1, keepdims=True); rs[rs == 0] = 1.0
+            cs_sub /= rs
+            if len(labels_present) == 2:
+                auc_roc_macro = float(roc_auc_score(gt_class_ids == labels_present[1], cs_sub[:, 1]))
+            else:
+                auc_roc_macro = float(roc_auc_score(
+                    gt_class_ids, cs_sub, multi_class="ovr", average="macro",
+                    labels=labels_present,
+                ))
+        except Exception as e:
+            print(f"[Warning] AUC ROC: {e}")
+
     # Pairwise Instance grouping F1
     tp = total_gt = total_pred = 0
-    scenes = defaultdict(list)
+    scenes: dict = defaultdict(list)
     for i in range(len(embs)):
         scenes[(shard_paths[i], scene_idxs[i])].append(i)
-        
     for pulses in scenes.values():
         n = len(pulses)
         for i in range(n):
             for j in range(i + 1, n):
                 idx_i, idx_j = pulses[i], pulses[j]
-                if gt_inst_ids[idx_i] == -1 or gt_inst_ids[idx_j] == -1: continue
+                if gt_inst_ids[idx_i] == -1 or gt_inst_ids[idx_j] == -1:
+                    continue
                 gs = gt_inst_ids[idx_i]   == gt_inst_ids[idx_j]
                 ps = pred_inst_ids[idx_i] == pred_inst_ids[idx_j]
-                if gs: total_gt += 1
+                if gs: total_gt   += 1
                 if ps: total_pred += 1
-                if gs and ps: tp += 1
+                if gs and ps: tp  += 1
 
-    prec = tp / total_pred if total_pred > 0 else 1.0
-    rec  = tp / total_gt   if total_gt   > 0 else 1.0
+    prec     = tp / total_pred if total_pred > 0 else 1.0
+    rec      = tp / total_gt   if total_gt   > 0 else 1.0
     group_f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
 
-    # DEC entropy (lower = more confident clusters)
+    # DEC entropy
     entropy = float(-np.mean(np.sum(q_soft * np.log(q_soft + 1e-9), axis=1)))
 
-    class_stats = {}
-    for cid in sorted(set(gt_class_ids)):
-        mask = gt_class_ids == cid
+    # Per-class precision / recall / F1
+    labels_sorted = sorted(set(gt_class_ids[gt_class_ids >= 0].tolist()))
+    if valid_mask.sum() > 0:
+        prec_arr, rec_arr, f1_arr, _ = precision_recall_fscore_support(
+            gt_v, pred_v, labels=labels_sorted, zero_division=0, average=None,
+        )
+    else:
+        z = [0.0] * len(labels_sorted)
+        prec_arr, rec_arr, f1_arr = z, z, z
+
+    class_stats: dict = {}
+    for li, cid in enumerate(labels_sorted):
+        mask      = gt_class_ids == cid
         class_acc = float((gt_class_ids[mask] == pred_class_ids[mask]).mean()) if mask.sum() > 0 else 0.0
         class_stats[int(cid)] = {
-            "name":  CLASS_NAMES.get(int(cid), f"Class {cid}"),
-            "count": int(mask.sum()),
-            "accuracy": round(class_acc, 4),
+            "name":      CLASS_NAMES.get(int(cid), f"Class {cid}"),
+            "count":     int(mask.sum()),
+            "accuracy":  round(class_acc,           4),
+            "precision": round(float(prec_arr[li]), 4),
+            "recall":    round(float(rec_arr[li]),  4),
+            "f1":        round(float(f1_arr[li]),   4),
         }
 
+    n_samples  = len(gt_class_ids)
+
     return {
-        "cls_accuracy":  round(cls_acc,  4),
-        "cls_f1_macro":  round(cls_f1,   4),
-        "grouping_f1":   round(group_f1, 4),
-        "silhouette":    round(sil, 4) if not np.isnan(sil) else None,
-        "ari":           round(ari, 4),
-        "nmi":           round(nmi, 4),
-        "dec_entropy":   round(entropy, 4),
-        "n_clusters":    int(len(np.unique(cluster_ids[cluster_ids >= 0]))),
-        "n_noise":       int((cluster_ids == -1).sum()),
-        "n_total":       int(len(cluster_ids)),
-        "per_class_stats": class_stats,
+        "classification_accuracy":   round(cls_acc,          4),
+        "cls_f1_macro":              round(cls_f1_macro,     4),
+        "cls_f1_weighted":           round(cls_f1_weighted,  4),
+        "auc_roc_macro":             (round(auc_roc_macro, 4) if not np.isnan(auc_roc_macro) else None),
+        "silhouette_score":          (round(sil, 4) if not np.isnan(sil) else None),
+        "davies_bouldin_index":      (round(dbi, 4) if not np.isnan(dbi) else None),
+        "calinski_harabasz_index":   (round(chi, 4) if not np.isnan(chi) else None),
+        "ari":                       round(ari, 4),
+        "nmi":                       round(nmi, 4),
+        "cluster_purity":            round(cluster_purity, 4),
+        "grouping_precision":        round(prec, 4),
+        "grouping_recall":           round(rec, 4),
+        "grouping_f1":               round(group_f1, 4),
+        "n_clusters_found":          int(len(uc)),
+        "n_noise_points":            int((cluster_ids == -1).sum()),
+        "n_gt_instances":            len(set(zip(shard_paths, gt_inst_ids))),
+        "n_pred_instances":          len(set(pred_inst_ids)),
+        "n_total":                   int(n_samples),
+        "time_inference_s":          round(inference_time_s, 3),
+        "time_reduce_s":             round(reduce_time_s, 3),
+        "time_hdbscan_s":            round(hdbscan_time_s, 3),
+        "throughput_inference_smp_s": round(n_samples / inference_time_s, 2) if inference_time_s > 0 else None,
+        "throughput_reduce_smp_s":    round(n_samples / reduce_time_s, 2) if reduce_time_s > 0 else None,
+        "throughput_hdbscan_smp_s":   round(n_samples / hdbscan_time_s, 2) if hdbscan_time_s > 0 else None,
+        "per_class_stats":           class_stats,
     }
 
 
@@ -568,6 +681,35 @@ def plot_umap_by_class(xy: np.ndarray, gt_class_ids: np.ndarray, out_path: str):
     plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
     print(f"[Plot] fig1 saved → {out_path}")
+
+
+def plot_umap_by_cluster(xy: np.ndarray, cluster_ids: np.ndarray, out_path: str):
+    """Fig 1b: UMAP coloured by HDBSCAN cluster."""
+    unique_clusters = np.unique(cluster_ids)
+    cmap   = plt.get_cmap("tab20", max(len(unique_clusters), 1))
+    colors = {c: cmap(i) for i, c in enumerate(sorted(c for c in unique_clusters if c >= 0))}
+    colors[-1] = (0.5, 0.5, 0.5, 1.0)  # Noise points as grey
+
+    fig, ax = plt.subplots(figsize=(12, 9))
+    _dark_scatter_setup(fig, ax, "UMAP Projection — Coloured by HDBSCAN Cluster (Exp09)")
+
+    for c in unique_clusters:
+        mask = cluster_ids == c
+        label = "Noise" if c == -1 else f"Cluster {c}"
+        color = colors.get(c, "#888888")
+        ax.scatter(xy[mask, 0], xy[mask, 1], s=6, alpha=0.65 if c != -1 else 0.3,
+                   color=color, rasterized=True, label=label)
+
+    legend = ax.legend(
+        loc="best", fontsize=7.5, framealpha=0.25,
+        labelcolor="white", facecolor=DARK_BG, ncol=3,
+    )
+    ax.set_xlabel("UMAP-1", color="#AAAAAA")
+    ax.set_ylabel("UMAP-2", color="#AAAAAA")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"[Plot] fig1b saved → {out_path}")
 
 
 def plot_umap_by_domain(xy: np.ndarray, domain_labels: np.ndarray, out_path: str):
@@ -691,6 +833,270 @@ def plot_soft_q_heatmap(q_soft: np.ndarray, gt_class_ids: np.ndarray, out_path: 
 
 
 # ---------------------------------------------------------------------------
+# Class probability scores from DEC q_soft  (exp09 array-based variant)
+# ---------------------------------------------------------------------------
+
+def build_class_scores_from_dec_arr(
+    q_soft: np.ndarray, gt_class_ids: np.ndarray
+) -> np.ndarray:
+    """
+    Build a (N, n_classes) probability matrix by aligning DEC internal clusters
+    to GT classes via hard-assignment majority vote, then summing q_soft values
+    for all DEC clusters that share the same semantic class.
+
+    Used as a proxy confidence score for ROC / PR / calibration curves.
+    Note: confidence scores may appear over-confident when few semantic classes
+    are present; curves remain statistically valid.
+
+    Returns
+    -------
+    class_scores : np.ndarray, shape (N, n_classes), rows normalised to sum to 1.
+    """
+    n_classes = int(gt_class_ids.max()) + 1
+    q_matrix  = q_soft.astype(np.float32)
+
+    dec_votes: dict = defaultdict(list)
+    for i in range(len(gt_class_ids)):
+        hard_dec = int(np.argmax(q_matrix[i]))
+        dec_votes[hard_dec].append(int(gt_class_ids[i]))
+    dec_map = {k: max(set(v), key=v.count) for k, v in dec_votes.items()}
+
+    class_scores = np.zeros((len(gt_class_ids), n_classes), dtype=np.float32)
+    for dec_k, cls_id in dec_map.items():
+        if 0 <= cls_id < n_classes and dec_k < q_matrix.shape[1]:
+            class_scores[:, cls_id] += q_matrix[:, dec_k]
+
+    row_sums = class_scores.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1.0
+    class_scores /= row_sums
+    return class_scores
+
+
+# ---------------------------------------------------------------------------
+# New plots (exp09)
+# ---------------------------------------------------------------------------
+
+def _dark_ax09(ax, title: str):
+    ax.set_facecolor(PANEL_BG)
+    ax.set_title(title, color="white", fontsize=11, fontweight="bold", pad=10)
+    ax.tick_params(colors="#888888")
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#333333")
+
+
+def plot_confusion_matrix_09(
+    gt_class_ids: np.ndarray, pred_class_ids: np.ndarray,
+    out_dir: str, exp_tag: str = "exp09"
+) -> str:
+    """Normalised confusion matrix heatmap."""
+    from sklearn.metrics import confusion_matrix
+    valid  = (pred_class_ids >= 0) & (gt_class_ids >= 0)
+    yt, yp = gt_class_ids[valid], pred_class_ids[valid]
+    labels = sorted(set(yt.tolist()) | set(yp.tolist()))
+    cm     = confusion_matrix(yt, yp, labels=labels, normalize="true")
+    ticks  = [CLASS_NAMES.get(l, f"C{l}") for l in labels]
+
+    fig, ax = plt.subplots(figsize=(max(6, len(labels) * 0.9 + 2),
+                                     max(5, len(labels) * 0.8 + 2)))
+    fig.patch.set_facecolor(DARK_BG)
+    _dark_ax09(ax, f"Normalised Confusion Matrix ({exp_tag})")
+    im = ax.imshow(cm, cmap="viridis", vmin=0, vmax=1)
+    plt.colorbar(im, ax=ax, label="Proportion of true class")
+    ax.set_xticks(range(len(labels))); ax.set_yticks(range(len(labels)))
+    ax.set_xticklabels(ticks, rotation=45, ha="right", fontsize=8, color="#CCCCCC")
+    ax.set_yticklabels(ticks, fontsize=8, color="#CCCCCC")
+    ax.set_xlabel("Predicted", color="#AAAAAA")
+    ax.set_ylabel("Ground Truth", color="#AAAAAA")
+    for i in range(len(labels)):
+        for j in range(len(labels)):
+            ax.text(j, i, f"{cm[i, j]:.2f}", ha="center", va="center",
+                    fontsize=8, color="white" if cm[i, j] < 0.6 else "black")
+    plt.tight_layout()
+    out_path = os.path.join(out_dir, "fig_confusion_matrix.png")
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=DARK_BG)
+    plt.close()
+    print(f"[Plot] Saved -> {out_path}")
+    return out_path
+
+
+def plot_pr_curves_09(
+    gt_class_ids: np.ndarray, class_scores: np.ndarray,
+    out_dir: str, exp_tag: str = "exp09"
+) -> str:
+    """Per-class Precision-Recall curves using DEC q_soft as a proxy confidence score."""
+    from sklearn.metrics import precision_recall_curve, average_precision_score
+    unique_classes = sorted(set(gt_class_ids[gt_class_ids >= 0].tolist()))
+    n_cls = class_scores.shape[1]
+    cmap  = plt.get_cmap("tab20", max(len(unique_classes), 1))
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    fig.patch.set_facecolor(DARK_BG)
+    _dark_ax09(ax, (f"Precision-Recall Curves ({exp_tag})\n"
+                    "[Proxy confidence: DEC q_soft remapped via hard-assignment alignment]"))
+    for i, cls_id in enumerate(unique_classes):
+        if cls_id >= n_cls:
+            continue
+        y_bin  = (gt_class_ids == cls_id).astype(int)
+        scores = class_scores[:, cls_id]
+        try:
+            prec, rec, _ = precision_recall_curve(y_bin, scores)
+            ap = average_precision_score(y_bin, scores)
+            ax.plot(rec, prec, color=cmap(i), lw=1.5,
+                    label=f"{CLASS_NAMES.get(cls_id, f'C{cls_id}')} (AP={ap:.3f})")
+        except Exception as e:
+            print(f"[Warning] PR curve class {cls_id}: {e}")
+    ax.set_xlabel("Recall", color="#AAAAAA")
+    ax.set_ylabel("Precision", color="#AAAAAA")
+    ax.set_xlim([0.0, 1.0]); ax.set_ylim([0.0, 1.05])
+    ax.legend(fontsize=8, framealpha=0.3, labelcolor="white",
+              facecolor=DARK_BG, loc="lower left")
+    plt.tight_layout()
+    out_path = os.path.join(out_dir, "fig_pr_curve.png")
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=DARK_BG)
+    plt.close()
+    print(f"[Plot] Saved -> {out_path}")
+    return out_path
+
+
+def plot_roc_curves_09(
+    gt_class_ids: np.ndarray, class_scores: np.ndarray,
+    out_dir: str, exp_tag: str = "exp09"
+) -> str:
+    """Per-class ROC curves using DEC q_soft as a proxy confidence score."""
+    from sklearn.metrics import roc_curve, roc_auc_score
+    unique_classes = sorted(set(gt_class_ids[gt_class_ids >= 0].tolist()))
+    n_cls = class_scores.shape[1]
+    cmap  = plt.get_cmap("tab20", max(len(unique_classes), 1))
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    fig.patch.set_facecolor(DARK_BG)
+    _dark_ax09(ax, (f"ROC Curves ({exp_tag})\n"
+                    "[Proxy confidence: DEC q_soft remapped via hard-assignment alignment]"))
+    ax.plot([0, 1], [0, 1], "--", color="#555555", lw=1.5, label="Random (AUC=0.5)")
+    for i, cls_id in enumerate(unique_classes):
+        if cls_id >= n_cls:
+            continue
+        y_bin  = (gt_class_ids == cls_id).astype(int)
+        scores = class_scores[:, cls_id]
+        if y_bin.sum() == 0 or y_bin.sum() == len(y_bin):
+            continue
+        try:
+            fpr, tpr, _ = roc_curve(y_bin, scores)
+            auc = roc_auc_score(y_bin, scores)
+            ax.plot(fpr, tpr, color=cmap(i), lw=1.5,
+                    label=f"{CLASS_NAMES.get(cls_id, f'C{cls_id}')} (AUC={auc:.3f})")
+        except Exception as e:
+            print(f"[Warning] ROC curve class {cls_id}: {e}")
+    ax.set_xlabel("False Positive Rate", color="#AAAAAA")
+    ax.set_ylabel("True Positive Rate (Recall)", color="#AAAAAA")
+    ax.set_xlim([0.0, 1.0]); ax.set_ylim([0.0, 1.05])
+    ax.legend(fontsize=8, framealpha=0.3, labelcolor="white",
+              facecolor=DARK_BG, loc="lower right")
+    plt.tight_layout()
+    out_path = os.path.join(out_dir, "fig_roc_curve.png")
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=DARK_BG)
+    plt.close()
+    print(f"[Plot] Saved -> {out_path}")
+    return out_path
+
+
+def plot_calibration_curve_09(
+    gt_class_ids: np.ndarray, pred_class_ids: np.ndarray,
+    class_scores: np.ndarray, out_dir: str, exp_tag: str = "exp09"
+) -> str:
+    """Reliability diagram: model confidence vs observed accuracy."""
+    from sklearn.calibration import calibration_curve as sk_cal_curve
+    valid  = (pred_class_ids >= 0) & (gt_class_ids >= 0)
+    yt, yp = gt_class_ids[valid], pred_class_ids[valid]
+    cs     = class_scores[valid]
+    confidence = cs.max(axis=1)
+    correct    = (yt == yp).astype(int)
+    try:
+        prob_true, prob_pred = sk_cal_curve(correct, confidence, n_bins=10,
+                                             strategy="uniform")
+    except Exception as e:
+        print(f"[Warning] Calibration curve failed: {e}")
+        return ""
+    fig, ax = plt.subplots(figsize=(8, 6))
+    fig.patch.set_facecolor(DARK_BG)
+    _dark_ax09(ax, (f"Confidence / Calibration Curve ({exp_tag})\n"
+                    "[Proxy confidence: max DEC q_soft class score]"))
+    ax.plot([0, 1], [0, 1], "--", color="#555555", lw=1.5, label="Perfect calibration")
+    ax.plot(prob_pred, prob_true, "o-", color="#4CC9F0", lw=2, ms=6, label="Model")
+    ax.set_xlabel("Mean Predicted Confidence", color="#AAAAAA")
+    ax.set_ylabel("Fraction Correct (Accuracy)", color="#AAAAAA")
+    ax.set_xlim([0.0, 1.0]); ax.set_ylim([0.0, 1.05])
+    ax.legend(fontsize=9, framealpha=0.3, labelcolor="white", facecolor=DARK_BG)
+    plt.tight_layout()
+    out_path = os.path.join(out_dir, "fig_calibration_curve.png")
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=DARK_BG)
+    plt.close()
+    print(f"[Plot] Saved -> {out_path}")
+    return out_path
+
+
+def plot_time_vs_distance_09(
+    embs: np.ndarray, gt_inst_ids: np.ndarray, shard_paths: list,
+    scene_idxs: np.ndarray, start_idxs: np.ndarray, time_res_arr: np.ndarray,
+    out_dir: str, exp_tag: str = "exp09", max_pairs: int = 10_000
+) -> str:
+    """
+    Scatter of intra-scene pulse pairs: time difference (X) vs L2 embedding
+    distance (Y). Green = same GT instance; Red = different.
+    """
+    n      = len(embs)
+    scenes: dict = defaultdict(list)
+    for i in range(n):
+        scenes[(shard_paths[i], int(scene_idxs[i]))].append(i)
+
+    rng       = np.random.default_rng(42)
+    all_pairs: list = []
+    for idxs in scenes.values():
+        m = len(idxs)
+        for ii in range(m):
+            for jj in range(ii + 1, m):
+                i, j = idxs[ii], idxs[jj]
+                if gt_inst_ids[i] == -1 or gt_inst_ids[j] == -1:
+                    continue
+                td   = abs(float(start_idxs[i]) * float(time_res_arr[i]) -
+                           float(start_idxs[j]) * float(time_res_arr[j]))
+                ed   = float(np.linalg.norm(embs[i] - embs[j]))
+                same = bool(gt_inst_ids[i] == gt_inst_ids[j])
+                all_pairs.append((td, ed, same))
+
+    if len(all_pairs) > max_pairs:
+        idx       = rng.choice(len(all_pairs), max_pairs, replace=False)
+        all_pairs = [all_pairs[k] for k in idx]
+
+    same_td, same_ed, diff_td, diff_ed = [], [], [], []
+    for td, ed, same in all_pairs:
+        if same:
+            same_td.append(td); same_ed.append(ed)
+        else:
+            diff_td.append(td); diff_ed.append(ed)
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    fig.patch.set_facecolor(DARK_BG)
+    _dark_ax09(ax, (f"Time Difference vs Embedding Distance ({exp_tag})\n"
+                    "Green = Same GT Instance  |  Red = Different GT Instance"))
+    if diff_td:
+        ax.scatter(diff_td, diff_ed, s=4, alpha=0.25, color="#E63946", rasterized=True,
+                   label=f"Different instance (n={len(diff_td):,})")
+    if same_td:
+        ax.scatter(same_td, same_ed, s=6, alpha=0.6, color="#06D6A0", rasterized=True,
+                   label=f"Same instance (n={len(same_td):,})")
+    ax.set_xlabel("Time Difference (s)", color="#AAAAAA")
+    ax.set_ylabel("Embedding L2 Distance", color="#AAAAAA")
+    ax.legend(fontsize=9, framealpha=0.3, labelcolor="white", facecolor=DARK_BG)
+    plt.tight_layout()
+    out_path = os.path.join(out_dir, "fig_time_vs_distance.png")
+    plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=DARK_BG)
+    plt.close()
+    print(f"[Plot] Saved -> {out_path}")
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # Save predictions.h5
 # ---------------------------------------------------------------------------
 
@@ -784,6 +1190,10 @@ def main():
                         help="Max time diff (s) to group pulses from different sensors.")
     parser.add_argument("--dist_threshold", type=float, default=0.5,
                         help="Max embedding distance to group pulses from different sensors.")
+    parser.add_argument("--grouping_mode", type=str, default="greedy",
+                        choices=["greedy", "channel_capped"],
+                        help=("greedy: any pulse within thresholds joins the instance. "
+                              "channel_capped: at most one pulse per channel (max 4)."))
     args = parser.parse_args()
 
     config_path = os.path.abspath(args.config)
@@ -836,12 +1246,15 @@ def main():
 
     # Extract embeddings
     print("[Inference] Extracting embeddings...")
-    t0      = time.time()
-    results = extract_features(task, infer_loader, device, infer_ds)
+    t_infer_start = time.time()
+    results       = extract_features(task, infer_loader, device, infer_ds)
+    inference_time_s = time.time() - t_infer_start
     embs    = results["embs"]
-    print(f"[Inference] {len(embs):,} embeddings in {time.time()-t0:.1f}s")
+    print(f"[Inference] {len(embs):,} embeddings in {inference_time_s:.1f}s  "
+          f"({len(embs) / inference_time_s:.0f} samples/s)")
 
     # Dimensionality reduction for clustering
+    t_reduce = time.time()
     if args.reduce_method == "umap":
         if args.reduce_dims == 2:
             xy_cluster = xy_plot = umap_nd(embs, n_components=2)
@@ -851,9 +1264,14 @@ def main():
     else:
         xy_cluster = embs
         xy_plot    = umap_nd(embs, n_components=2)
+    reduce_time_s = time.time() - t_reduce
+    print(f"[Timing] Reduction: {reduce_time_s:.2f}s  ({len(embs) / reduce_time_s if reduce_time_s > 0 else 0:.1f} samples/s)")
 
     # HDBSCAN
+    t_cluster = time.time()
     cluster_ids = hdbscan_cluster(xy_cluster, min_cluster_size=args.min_cluster_size)
+    hdbscan_time_s = time.time() - t_cluster
+    print(f"[Timing] HDBSCAN:   {hdbscan_time_s:.2f}s  ({len(embs) / hdbscan_time_s if hdbscan_time_s > 0 else 0:.1f} samples/s)")
 
     # Alignment
     n_classes      = max(int(results["gt_class_ids"].max()) + 1, len(CLASS_NAMES))
@@ -864,6 +1282,11 @@ def main():
     # Instance Grouping
     print("[Grouping] Computing per-instance majority-vote prediction with heuristics...")
     gt_inst_ids = np.array([entry[4] for entry in infer_ds.index], dtype=np.int32)
+    # Build class probability scores from DEC q_soft
+    class_scores = build_class_scores_from_dec_arr(
+        results["q_soft"], results["gt_class_ids"]
+    )
+
     pred_inst_ids, inst_majority = group_pd_instances(
         embs           = results["embs"],
         pred_class_ids = pred_class_ids,
@@ -873,6 +1296,8 @@ def main():
         time_res_arr   = results["time_res_arr"],
         time_th        = args.time_threshold,
         dist_th        = args.dist_threshold,
+        mode           = args.grouping_mode,
+        ch_idxs        = results.get("ch_idxs"),
     )
     
     # Overwrite pulse-level predictions with their instance-level majority vote
@@ -883,33 +1308,40 @@ def main():
     # Metrics
     print("[Metrics] Computing...")
     metrics = compute_metrics(
-        gt_class_ids   = results["gt_class_ids"],
-        pred_class_ids = pred_class_ids,
-        pred_inst_ids  = pred_inst_ids,
-        gt_inst_ids    = gt_inst_ids,
-        embs           = results["embs"],
-        cluster_ids    = cluster_ids,
-        q_soft         = results["q_soft"],
-        shard_paths    = results["shard_paths"],
-        scene_idxs     = results["scene_idxs"],
+        gt_class_ids     = results["gt_class_ids"],
+        pred_class_ids   = pred_class_ids,
+        pred_inst_ids    = pred_inst_ids,
+        gt_inst_ids      = gt_inst_ids,
+        embs             = results["embs"],
+        cluster_ids      = cluster_ids,
+        q_soft           = results["q_soft"],
+        shard_paths      = results["shard_paths"],
+        scene_idxs       = results["scene_idxs"],
+        class_scores     = class_scores,
+        inference_time_s = inference_time_s,
+        reduce_time_s    = reduce_time_s,
+        hdbscan_time_s   = hdbscan_time_s,
     )
     
     metrics.update({
-        "checkpoint_id": args.checkpoint_id,
-        "reduce_method": args.reduce_method,
-        "reduce_dims":   args.reduce_dims,
+        "checkpoint_id":  args.checkpoint_id,
+        "reduce_method":  args.reduce_method,
+        "reduce_dims":    args.reduce_dims,
         "time_threshold": args.time_threshold,
         "dist_threshold": args.dist_threshold,
+        "grouping_mode":  args.grouping_mode,
     })
 
     print("\n[Metrics]")
     for k, v in metrics.items():
         if k != "per_class_stats":
             print(f"  {k}: {v}")
-            
-    print("\n[Per-Class Accuracy]")
+
+    print("\n[Per-Class Stats]")
     for cid, stat in metrics["per_class_stats"].items():
-        print(f"  {stat['name']:30s}  n={stat['count']:5d}  acc={stat['accuracy']:.4f}")
+        print(f"  {stat['name']:30s}  n={stat['count']:5d}  "
+              f"acc={stat['accuracy']:.4f}  prec={stat.get('precision', 0):.4f}  "
+              f"rec={stat.get('recall', 0):.4f}  f1={stat.get('f1', 0):.4f}")
 
     # Save metrics
     metrics["checkpoint_id"] = node_id
@@ -925,16 +1357,34 @@ def main():
     save_predictions_h5(h5_path, results, cluster_ids, pred_class_ids,
                         gt_inst_ids, pred_inst_ids, infer_ds)
 
-    # Plots
+    # Original plots
     print("[Plots] Generating...")
     plot_umap_by_class(xy_plot, results["gt_class_ids"],
                        os.path.join(out_dir, "fig1_umap_by_class.png"))
+    plot_umap_by_cluster(xy_plot, cluster_ids,
+                         os.path.join(out_dir, "fig1b_umap_by_cluster.png"))
     plot_umap_by_domain(xy_plot, results["domain_labels"],
                         os.path.join(out_dir, "fig2_umap_by_domain.png"))
     plot_cluster_composition(cluster_ids, results["gt_class_ids"], n_classes,
                              os.path.join(out_dir, "fig3_cluster_composition.png"))
     plot_soft_q_heatmap(results["q_soft"], results["gt_class_ids"],
                         os.path.join(out_dir, "fig4_soft_q_heatmap.png"))
+
+    # New plots
+    plot_confusion_matrix_09(results["gt_class_ids"], pred_class_ids,
+                             out_dir, exp_tag="exp09")
+    plot_pr_curves_09(results["gt_class_ids"], class_scores,
+                      out_dir, exp_tag="exp09")
+    plot_roc_curves_09(results["gt_class_ids"], class_scores,
+                       out_dir, exp_tag="exp09")
+    plot_calibration_curve_09(results["gt_class_ids"], pred_class_ids,
+                              class_scores, out_dir, exp_tag="exp09")
+    plot_time_vs_distance_09(
+        embs=results["embs"], gt_inst_ids=gt_inst_ids,
+        shard_paths=results["shard_paths"], scene_idxs=results["scene_idxs"],
+        start_idxs=results["start_idxs"], time_res_arr=results["time_res_arr"],
+        out_dir=out_dir, exp_tag="exp09",
+    )
 
     # Lineage
     register_process(
@@ -945,8 +1395,11 @@ def main():
         appended_history = (
             f"Exp09 inference (checkpoint={node_id}). "
             f"cls_acc={metrics['cls_accuracy']:.3f}, "
+            f"cls_f1_macro={metrics['cls_f1_macro']:.3f}, "
             f"grouping_f1={metrics['grouping_f1']:.3f}, "
+            f"auc_roc={metrics.get('auc_roc_macro')}, "
             f"silhouette={metrics.get('silhouette')}, "
+            f"grouping_mode={args.grouping_mode}, "
             f"n_clusters={metrics['n_clusters']}."
         ),
         force_node_id = inf_id,

@@ -26,6 +26,6 @@
   "reduce_dims": 2,
   "time_threshold": 1e-05,
   "dist_threshold": 0.5,
-  "timestamp": "20260604_000718",
+  "timestamp": "20260606_022505",
   "n_sources": 1
 }
