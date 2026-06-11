@@ -1,0 +1,55 @@
+{
+    "classification_accuracy": 0.8859,
+    "cls_f1_macro": 0.8706,
+    "cls_f1_weighted": 0.8824,
+    "auc_roc_macro": 0.9511,
+    "silhouette_score": -0.1284,
+    "davies_bouldin_index": 1.5435,
+    "calinski_harabasz_index": 20485.6525,
+    "ari": 0.1957,
+    "nmi": 0.2741,
+    "cluster_purity": 0.8859,
+    "grouping_precision": 0.9878,
+    "grouping_recall": 0.679,
+    "grouping_f1": 0.8048,
+    "n_pulses": 15924,
+    "n_clusters_found": 20,
+    "n_noise_points": 6,
+    "n_gt_instances": 3981,
+    "n_pred_instances": 6773,
+    "time_inference_s": 100.504,
+    "time_reduce_s": 99.058,
+    "time_hdbscan_s": 0.941,
+    "throughput_inference_smp_s": 158.44,
+    "throughput_reduce_smp_s": 160.75,
+    "throughput_hdbscan_smp_s": 16915.98,
+    "per_class_stats": {
+        "3": {
+            "name": "PD2 Incision Measured",
+            "count": 5844,
+            "accuracy": 0.7385,
+            "precision": 0.936,
+            "recall": 0.7393,
+            "f1": 0.8261
+        },
+        "4": {
+            "name": "PD3 Delamination Measured",
+            "count": 10080,
+            "accuracy": 0.9707,
+            "precision": 0.8654,
+            "recall": 0.9707,
+            "f1": 0.915
+        }
+    },
+    "checkpoint_id": "ltlo",
+    "time_threshold": 1e-07,
+    "dist_threshold": 0.5,
+    "grouping_mode": "channel_capped",
+    "min_cluster_size": 5,
+    "epsilon": 5.0,
+    "reduce_method": "tsne",
+    "reduce_dims": 2,
+    "sources": [
+        "data/features/stft_magnitude/20260525_132349-ms-HvA1-kmqo:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"
+    ]
+}

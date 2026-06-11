@@ -75,7 +75,7 @@ def pso_localise(TDOA_N, receivers, speed_of_EM, max_iterations=10000, num_parti
     """
     # Initialize particles within boundary
     particles_position = np.random.uniform(
-        low=[0.5, 0.5, 0.1],
+        low=[0.5, 0.5, 0.05],
         high=[11.0, 11.0, 2.0],
         size=(num_particles, 3)
     )

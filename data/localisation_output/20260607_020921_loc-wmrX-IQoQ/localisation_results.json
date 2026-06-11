@@ -1,0 +1,47 @@
+[
+    {
+        "cluster_id": 3,
+        "pred_class_id": 3,
+        "gt_class_id": 3,
+        "num_valid_instances": 2,
+        "avg_compute_time_per_inst": 0.694,
+        "est_x": 0.992810880783225,
+        "est_y": 4.90321129831448,
+        "est_z": 1.7334969016402386,
+        "true_x": 3.7,
+        "true_y": 7.0,
+        "true_z": 0.1,
+        "error_m": 3.7939,
+        "error_pct": 184.3359
+    },
+    {
+        "cluster_id": 11,
+        "pred_class_id": 3,
+        "gt_class_id": 3,
+        "num_valid_instances": 1,
+        "avg_compute_time_per_inst": 0.639,
+        "est_x": 4.737751583450654,
+        "est_y": 4.573515153853793,
+        "est_z": 0.1,
+        "true_x": 3.7,
+        "true_y": 7.0,
+        "true_z": 0.1,
+        "error_m": 2.6391,
+        "error_pct": 57.4267
+    },
+    {
+        "cluster_id": 17,
+        "pred_class_id": 4,
+        "gt_class_id": 4,
+        "num_valid_instances": 27,
+        "avg_compute_time_per_inst": 0.617,
+        "est_x": 3.956045503227721,
+        "est_y": 9.012043667320741,
+        "est_z": 0.8556913304000697,
+        "true_x": 3.7,
+        "true_y": 7.0,
+        "true_z": 0.1,
+        "error_m": 2.1645,
+        "error_pct": 50.5082
+    }
+]

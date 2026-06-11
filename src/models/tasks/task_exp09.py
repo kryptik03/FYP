@@ -176,6 +176,9 @@ class SupConDECTask_Exp09(nn.Module):
         Returns:
             Scalar loss tensor.
         """
+        if domain_logit.size(1) == 0:
+            return torch.tensor(0.0, device=domain_logit.device)
+
         valid = domain_label >= 0
         if not valid.any():
             return torch.tensor(0.0, device=domain_logit.device)

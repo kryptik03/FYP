@@ -1,0 +1,52 @@
+{
+  "classification_accuracy": 0.8298,
+  "cls_f1_macro": 0.8193,
+  "cls_f1_weighted": 0.8309,
+  "auc_roc_macro": 0.8875,
+  "silhouette_score": 0.9969,
+  "davies_bouldin_index": 0.0189,
+  "calinski_harabasz_index": 2345180.2048,
+  "ari": 0.4324,
+  "nmi": 0.3219,
+  "cluster_purity": 0.8298,
+  "grouping_precision": 0.5857,
+  "grouping_recall": 0.4477,
+  "grouping_f1": 0.5075,
+  "n_clusters_found": 2,
+  "n_noise_points": 18,
+  "n_gt_instances": 3981,
+  "n_pred_instances": 5757,
+  "n_total": 15924,
+  "time_inference_s": 376.798,
+  "time_reduce_s": 86.003,
+  "time_hdbscan_s": 58.398,
+  "throughput_inference_smp_s": 42.26,
+  "throughput_reduce_smp_s": 185.16,
+  "throughput_hdbscan_smp_s": 272.68,
+  "per_class_stats": {
+    "3": {
+      "name": "Incision Meas",
+      "count": 5844,
+      "accuracy": 0.8008,
+      "precision": 0.7507,
+      "recall": 0.8023,
+      "f1": 0.7757
+    },
+    "4": {
+      "name": "Delamination",
+      "count": 10080,
+      "accuracy": 0.8451,
+      "precision": 0.8808,
+      "recall": 0.8457,
+      "f1": 0.8629
+    }
+  },
+  "checkpoint_id": "k7vt",
+  "reduce_method": "none",
+  "reduce_dims": 2,
+  "time_threshold": 1e-05,
+  "dist_threshold": 0.5,
+  "grouping_mode": "channel_capped",
+  "timestamp": "20260607_004542",
+  "n_sources": 1
+}

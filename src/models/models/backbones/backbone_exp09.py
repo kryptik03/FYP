@@ -324,13 +324,16 @@ class DECViT_Exp09(nn.Module):
         #    Attached to the GRL output (reversed-gradient CLS token).
         #    Trained with CrossEntropyLoss; n_domains=4 for Exp09.
         # ------------------------------------------------------------------
-        self.domain_head = nn.Sequential(
-            nn.Dropout(0.5),
-            nn.Linear(d_model, 256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(256, n_domains),
-        )
+        if n_domains > 0:
+            self.domain_head = nn.Sequential(
+                nn.Dropout(0.5),
+                nn.Linear(d_model, 256),
+                nn.ReLU(inplace=True),
+                nn.Dropout(0.5),
+                nn.Linear(256, n_domains),
+            )
+        else:
+            self.domain_head = None
 
         # Weight initialisation
         self._init_weights()
@@ -407,7 +410,10 @@ class DECViT_Exp09(nn.Module):
         # Step 8: Domain head via GRL
         #   Forward:  cls_out passes through unchanged.
         #   Backward: gradient is multiplied by −lambda_ (reversed).
-        cls_reversed = self.grl(cls_out)                    # (B, d_model)
-        domain_logit = self.domain_head(cls_reversed)       # (B, n_domains)
+        if self.domain_head is not None:
+            cls_reversed = self.grl(cls_out)                    # (B, d_model)
+            domain_logit = self.domain_head(cls_reversed)       # (B, n_domains)
+        else:
+            domain_logit = torch.empty(B, 0, device=x.device)
 
         return z, domain_logit

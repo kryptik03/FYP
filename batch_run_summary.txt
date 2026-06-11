@@ -1,0 +1,44 @@
+Command 1 (exp06):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp06.py --checkpoint_id M3Fu --grouping_mode channel_capped --source data/features/stft_magnitude/20260525_132349-ms-HvA1-kmqo:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 --reduce_method tsne --reduce_dims 2 --epsilon 5.0 --min_cluster_size 5 --time_threshold 1e-07 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp06_dec\20260606_194040_inf-M3Fu-zozf
+
+Command 2 (exp06):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp06.py --checkpoint_id M3Fu --grouping_mode channel_capped --source data/features/stft_magnitude/20260525_132349-ms-HvA1-kmqo:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 --reduce_method tsne --reduce_dims 3 --epsilon 5.0 --min_cluster_size 5 --time_threshold 1e-07 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp06_dec\20260606_194609_inf-M3Fu-vTgJ
+
+Command 3 (exp06):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp06.py --checkpoint_id M3Fu --grouping_mode channel_capped --source data/features/stft_magnitude/20260525_132349-ms-HvA1-kmqo:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 --reduce_method none --reduce_dims 2 --epsilon 5.0 --min_cluster_size 5 --time_threshold 1e-07 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp06_dec\20260606_195039_inf-M3Fu-CA4O
+
+Command 4 (exp07):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp07.py --checkpoint_id ltlo --grouping_mode channel_capped --source data/features/stft_magnitude/20260525_132349-ms-HvA1-kmqo:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 --reduce_method tsne --reduce_dims 3 --epsilon 5.0 --min_cluster_size 5 --time_threshold 1e-07 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp07_supcon_dec\20260606_195806_inf-ltlo-lPxq
+
+Command 5 (exp07):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp07.py --checkpoint_id ltlo --grouping_mode channel_capped --source data/features/stft_magnitude/20260525_132349-ms-HvA1-kmqo:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 --reduce_method none --reduce_dims 2 --epsilon 0.01 --min_cluster_size 5 --time_threshold 1e-07 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp07_supcon_dec\20260606_200231_inf-ltlo-h8bC
+
+Command 6 (exp07):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp07.py --checkpoint_id ltlo --grouping_mode channel_capped --source data/features/stft_magnitude/20260525_132349-ms-HvA1-kmqo:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 --reduce_method tsne --reduce_dims 2 --epsilon 5.0 --min_cluster_size 5 --time_threshold 1e-07 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp07_supcon_dec\20260606_200802_inf-ltlo-wmrX
+
+Command 7 (exp08):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp08.py --checkpoint_id VNce --grouping_mode channel_capped --source data/features/bispectra/20260530_221215-ms-HvA1-qeub:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 --reduce_method tsne --reduce_dims 2 --epsilon 5.0 --min_cluster_size 5 --time_threshold 1e-07 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp08_supcon_dec_vit\20260606_202450_inf-VNce-47QD
+
+Command 8 (exp08):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp08.py --checkpoint_id VNce --grouping_mode channel_capped --source data/features/bispectra/20260530_221215-ms-HvA1-qeub:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 --reduce_method tsne --reduce_dims 3 --epsilon 5.0 --min_cluster_size 5 --time_threshold 1e-07 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp08_supcon_dec_vit\20260606_203927_inf-VNce-0D29
+
+Command 9 (exp08):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp08.py --checkpoint_id VNce --grouping_mode channel_capped --source data/features/bispectra/20260530_221215-ms-HvA1-qeub:measured:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 --reduce_method none --reduce_dims 2 --epsilon 0.0 --min_cluster_size 5 --time_threshold 1e-07 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp08_supcon_dec_vit\20260606_204732_inf-VNce-HAVn
+
+Command 10 (exp09):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp09.py --checkpoint_id k7vt --grouping_mode channel_capped --reduce_method umap --reduce_dims 2 --time_threshold 1e-05 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp09_dec\20260606_204836_inf-k7vt-LobB
+
+Command 11 (exp09):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp09.py --checkpoint_id k7vt --grouping_mode channel_capped --reduce_method none --reduce_dims 2 --time_threshold 1e-05 --dist_threshold 0.5
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp09_dec\20260606_205153_inf-k7vt-B8Nt
+

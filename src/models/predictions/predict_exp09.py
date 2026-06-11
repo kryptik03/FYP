@@ -61,6 +61,7 @@ import sys
 import time
 import warnings
 warnings.filterwarnings("ignore", message="Tight layout not applied")
+from collections import defaultdict
 from datetime import datetime
 
 import h5py
@@ -315,7 +316,7 @@ def umap_nd(embs: np.ndarray, n_components: int = 2) -> np.ndarray:
         n_components=n_components,
         n_neighbors=15,
         min_dist=0.1,
-        metric="cosine",   # L2-normalised → cosine is the natural metric
+        metric="cosine",   # L2-normalised -> cosine is the natural metric
         random_state=42,
         verbose=False,
     )
@@ -360,15 +361,20 @@ def align_clusters_to_classes(
     cluster_labels = sorted(c for c in np.unique(cluster_ids) if c >= 0)
     n_clusters     = len(cluster_labels)
 
-    cost = np.zeros((n_clusters, n_classes), dtype=np.int32)
+    present_classes = sorted(c for c in np.unique(gt_class_ids) if 0 <= c < n_classes)
+    n_present = len(present_classes)
+    
+    # Map index to actual class id
+    class_idx_to_id = {i: cls_id for i, cls_id in enumerate(present_classes)}
+
+    cost = np.zeros((n_clusters, n_present), dtype=np.int32)
     for ci, cid in enumerate(cluster_labels):
         mask = cluster_ids == cid
-        for g in gt_class_ids[mask]:
-            if 0 <= g < n_classes:
-                cost[ci, g] += 1
+        for i, cls_id in class_idx_to_id.items():
+            cost[ci, i] += np.sum(gt_class_ids[mask] == cls_id)
 
     row_ind, col_ind = linear_sum_assignment(-cost)
-    cluster_to_class = {cluster_labels[r]: col_ind[r] for r in row_ind}
+    cluster_to_class = {cluster_labels[r]: class_idx_to_id[col_ind[r]] for r in row_ind}
 
     pred_class_ids = np.full_like(cluster_ids, fill_value=-1)
     for cid, cls in cluster_to_class.items():
@@ -680,7 +686,7 @@ def plot_umap_by_class(xy: np.ndarray, gt_class_ids: np.ndarray, out_path: str):
     plt.tight_layout()
     plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
-    print(f"[Plot] fig1 saved → {out_path}")
+    print(f"[Plot] fig1 saved -> {out_path}")
 
 
 def plot_umap_by_cluster(xy: np.ndarray, cluster_ids: np.ndarray, out_path: str):
@@ -709,7 +715,7 @@ def plot_umap_by_cluster(xy: np.ndarray, cluster_ids: np.ndarray, out_path: str)
     plt.tight_layout()
     plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
-    print(f"[Plot] fig1b saved → {out_path}")
+    print(f"[Plot] fig1b saved -> {out_path}")
 
 
 def plot_umap_by_domain(xy: np.ndarray, domain_labels: np.ndarray, out_path: str):
@@ -752,7 +758,7 @@ def plot_umap_by_domain(xy: np.ndarray, domain_labels: np.ndarray, out_path: str
     plt.tight_layout()
     plt.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
-    print(f"[Plot] fig2 saved → {out_path}")
+    print(f"[Plot] fig2 saved -> {out_path}")
 
 
 def plot_cluster_composition(
@@ -796,7 +802,7 @@ def plot_cluster_composition(
     plt.tight_layout()
     plt.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
-    print(f"[Plot] fig3 saved → {out_path}")
+    print(f"[Plot] fig3 saved -> {out_path}")
 
 
 def plot_soft_q_heatmap(q_soft: np.ndarray, gt_class_ids: np.ndarray, out_path: str):
@@ -829,7 +835,7 @@ def plot_soft_q_heatmap(q_soft: np.ndarray, gt_class_ids: np.ndarray, out_path: 
     plt.tight_layout()
     plt.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
-    print(f"[Plot] fig4 saved → {out_path}")
+    print(f"[Plot] fig4 saved -> {out_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -1163,7 +1169,7 @@ def save_predictions_h5(
         f.attrs["n_clusters"]  = int(len(set(cluster_ids.tolist())) - (1 if -1 in cluster_ids else 0))
         f.attrs["experiment"]  = "exp09"
 
-    print(f"[H5] predictions saved → {out_path}")
+    print(f"[H5] predictions saved -> {out_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -1350,7 +1356,7 @@ def main():
     metrics_path = os.path.join(out_dir, "metrics.json")
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
-    print(f"[Metrics] Saved → {metrics_path}")
+    print(f"[Metrics] Saved -> {metrics_path}")
 
     # Save predictions.h5
     h5_path = os.path.join(out_dir, "predictions.h5")
@@ -1394,13 +1400,13 @@ def main():
         folder_path      = out_dir,
         appended_history = (
             f"Exp09 inference (checkpoint={node_id}). "
-            f"cls_acc={metrics['cls_accuracy']:.3f}, "
+            f"cls_acc={metrics['classification_accuracy']:.3f}, "
             f"cls_f1_macro={metrics['cls_f1_macro']:.3f}, "
             f"grouping_f1={metrics['grouping_f1']:.3f}, "
             f"auc_roc={metrics.get('auc_roc_macro')}, "
-            f"silhouette={metrics.get('silhouette')}, "
+            f"silhouette={metrics.get('silhouette_score')}, "
             f"grouping_mode={args.grouping_mode}, "
-            f"n_clusters={metrics['n_clusters']}."
+            f"n_clusters={metrics.get('n_clusters_found')}."
         ),
         force_node_id = inf_id,
     )
@@ -1409,8 +1415,8 @@ def main():
     with open(os.path.join(out_dir, "analysis_history.txt"), "w") as f:
         f.write(get_node_history(inf_id))
 
-    print(f"\n[Done] All outputs → {out_dir}")
-    print(f"  fig2_umap_by_domain.png — check for domain overlap (DANN quality)")
+    print(f"\n[Done] All outputs -> {out_dir}")
+    print(f"  fig2_umap_by_domain.png - check for domain overlap (DANN quality)")
 
 
 if __name__ == "__main__":

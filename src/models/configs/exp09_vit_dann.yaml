@@ -28,25 +28,25 @@ experiment:
     ViT + Instance-SupCon + 4-Domain DANN (GRL) + 2-Channel Complex Bispectra.
     Solves Latent Space Fragmentation via Physics Invariance (Magnitude+Phase),
     Distance Invariance (cross-sensor pairing) and Domain Agnosticism (DANN).
-    DANN trained on equation, synthesised and measured, while SupCon/DEC  trained
-    on equation, synthesised, cwru and measured.
+    DANN not trained, while SupCon/DEC  trained
+    on synthesised only.
   parent_node_id: "HEXZ"
   task_type: "supcon_dec_dann_vit_bispectrum_v2"
 
 data:
   sources:
-  - type: "equation"
-    path: "data/features/bispectra_v2/20260602_180138-sy-0s6o-o13c"
-    train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-    val_shards: [17, 18, 19, 20]
+  #- type: "equation"
+  #  path: "data/features/bispectra_v2/20260602_180138-sy-0s6o-o13c"
+  #  train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  #  val_shards: [17, 18, 19, 20]
   - type: "synthesised"
     path: "data/features/bispectra_v2/20260602_182145-sy-1yGk-HEXZ"
     train_shards: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     val_shards: [17, 18, 19, 20]
-  - type: "measured"
-    path: "data/features/bispectra_v2/20260602_182024-ms-nQgf-3Uuj"
-    train_shards: [1, 2, 3]
-    val_shards: [4, 5]
+  #- type: "measured"
+  #  path: "data/features/bispectra_v2/20260602_182024-ms-nQgf-3Uuj"
+  #  train_shards: [1, 2, 3]
+  #  val_shards: [4, 5]
 
   max_pulse_len: 4096       # Reference only — not used for time-slicing in Exp09
   label_fraction: 0.10      # 10% labels for semi-supervised pairwise constraints
@@ -58,9 +58,9 @@ data:
   # Labelling one as -1, means the next domain id should not skip 1 number. 
   domain_map:
     equation: -1      # Pure-math synthetic — no EM physics, clean analytic shape
-    synthesised: 0    # HFSS co-simulation — EM propagation + geometry artefacts
+    synthesised: -1    # HFSS co-simulation — EM propagation + geometry artefacts
     cwru: -1          # Bearing lab measurements — real hardware, different sensor
-    measured: 1       # UHF PD sensor — target domain, oscilloscope quantisation
+    measured: -1       # UHF PD sensor — target domain, oscilloscope quantisation
 
 model:
   in_channels: 2        # Magnitude (ch0) + Phase (ch1) bispectrum channels
@@ -70,16 +70,17 @@ model:
   nhead: 6              # Attention heads (384/6=64 per head)
   depth: 6              # Transformer encoder blocks
   embedding_dim: 128    # L2-normalised DEC/SupCon output dimension
-  n_clusters: 9        # PD classes to cluster
-  n_domains: 2          # Domain head output size (must match len(data.domain_map))
+  n_clusters: 2        # PD classes to cluster
+  n_domains: 0          # Domain head output size (must match len(data.domain_map)).
+                        # Set to 0 to disable DANN
 
 task:
   simclr_temperature: 0.5       # SupCon temperature τ. Lower = clusters are more separated.
   dec_update_interval: 140      # Target-distribution update frequency (batches)
   dec_tol: 0.001                # DEC convergence tolerance
   pairwise_weight_gamma: 1.0    # Weight for pairwise must-link/cannot-link loss
-  dann_weight: 0.16559444         # Enabled domain-agnostic training
-  dann_lambda_max: 0.2           # Enabled GRL
+  dann_weight: 0         # Enabled domain-agnostic training
+  dann_lambda_max: 0           # Enabled GRL
 
 training:
   device: "auto"               # "auto" → CUDA if available, else CPU
@@ -112,4 +113,4 @@ tune:
   search_space:
     learning_rate_phase1: [1.0e-5, 1.5e-4]   # Log-uniform
     learning_rate_phase2: [1.0e-5, 1.5e-4]   # Log-uniform
-    dann_weight: [0.01, 0.5]                  # Log-uniform
+    # dann_weight: [0.01, 0.5]                  # Log-uniform

@@ -1,0 +1,17 @@
+[
+    {
+        "cluster_id": 14,
+        "pred_class_id": 4,
+        "gt_class_id": 4,
+        "num_valid_instances": 4,
+        "avg_compute_time_per_inst": 0.615,
+        "est_x": 3.500007051676963,
+        "est_y": 6.102067168062151,
+        "est_z": 1.3829482090455345,
+        "true_x": 3.7,
+        "true_y": 7.0,
+        "true_z": 0.1,
+        "error_m": 1.5787,
+        "error_pct": 49.1967
+    }
+]

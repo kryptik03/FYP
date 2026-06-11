@@ -1,0 +1,8 @@
+Command 10 (exp09):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp09.py --checkpoint_id k7vt --grouping_mode channel_capped --reduce_method umap --reduce_dims 2 --time_threshold 1e-05 --dist_threshold 0.5 --source data/features/bispectra_v2/20260602_180648-ms-HvA1-RyNB:measured:all_shards
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp09_dec\20260607_003704_inf-k7vt-BNuP
+
+Command 11 (exp09):
+  Run: .venv\Scripts\python src/models/predictions/predict_exp09.py --checkpoint_id k7vt --grouping_mode channel_capped --reduce_method none --reduce_dims 2 --time_threshold 1e-05 --dist_threshold 0.5 --source data/features/bispectra_v2/20260602_180648-ms-HvA1-RyNB:measured:all_shards
+  Output Folder: D:\Zee_Documents\Studies\Uni\Sem_8\KIE4002_FYP\Git_Cloned_Code\FYP\data\classification_output\exp09_dec\20260607_004542_inf-k7vt-r06G
+
