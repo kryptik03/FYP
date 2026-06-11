@@ -90,11 +90,11 @@ training:
   phase1_epochs: 33            # Phase 1 default — see epoch advice below
   phase2_epochs: 22            # Phase 2 default
   epochs: 55                   # Total kept for config compatibility
-  learning_rate_phase1: 7.99851e-05 # Tuned by Optuna trial 0 (node zefe)
-  learning_rate_phase2: 7.90907e-05 # Tuned by Optuna trial 0 (node zefe)
-  tuned_at: "20260603_111656"              # Optuna completion timestamp
-  tuning_node_id: "XORC"
-  tuning_val_loss: 0.90058516
+  learning_rate_phase1: 0.0001375095 # Tuned by Optuna trial 0 (node zefe)
+  learning_rate_phase2: 1.76265e-05 # Tuned by Optuna trial 0 (node zefe)
+  tuned_at: "20260611_060135"              # Optuna completion timestamp
+  tuning_node_id: "5G9N"
+  tuning_val_loss: 0.47735482
 
   # --- Epoch guidance ---
   # T4 GPU (Colab free):   ~30-40 min total  (estimate: ~40-50s/epoch)
