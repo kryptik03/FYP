@@ -1,0 +1,73 @@
+Lineage Tracker
+
+python src/utils/lineage_tracker.py --action visualize --root_id [NodeID]
+	- Visualize the branching history of datasets and experiments from a specific root node.
+
+python src/utils/lineage_tracker.py --action prune --node_id [NodeID]
+	- Safely delete a leaf node and its associated artifacts if an experiment failed or is no longer needed.
+
+python src/utils/lineage_tracker.py --action roots
+	- Print out all root nodes (base datasets).
+
+python src/utils/lineage_tracker.py --action all
+	- Print out the entire DAG history.
+
+python src/utils/lineage_tracker.py --action inspect --node_id <NODE_ID>
+	- Inspect a specific node's metadata in detail.
+
+python src/utils/lineage_tracker.py --action update_history --node_id <your_node_id>
+	- Update the audit history message for a specific node.
+
+
+Data Preparation & Ingestion
+
+python src/equation_signals_dataset_generation/equation_dataset_generate.py --num_shards 20 --scenes_per_shard 100
+	- Generate synthetic mathematical PD pulses.
+
+python src/ingestion/process_and_isolate.py --input_dir "data/unprocessed_measured/PD1_Void/PD1_Void_Batch1"
+	- Process raw oscilloscope waveforms into an interim format.
+
+python src/ingestion/generate_measured_shards.py --noise type <real/synthetic/none> --num_shards 20 --scenes_per_shard 100
+	- Generate standardized measured data HDF5 shards.
+
+python src/ingestion/generate_selective_shards.py --list
+	- View available processed measured data files.
+
+python src/ingestion/generate_selective_shards.py --include "PD3_*" "PD4_FeOx_Batch1_23kv.h5" --num_shards 20 --scenes_per_shard 100
+	- Create measured dataset shards from specific source files.
+
+
+Feature Extraction
+
+python src/features/extract_bispectra_v2.py --input_dir data/raw/synthesised/<folder> --parent_node_id <node_id>
+	- Extract 2-channel complex bispectra (magnitude + phase) required for Exp09. Must be run before training Exp09.
+
+
+Training Exp09 (ViT + SupCon + DANN + DEC)
+
+python src/models/hyperparam_tuning/tune_exp09.py --config src/models/configs/exp09_vit_dann.yaml
+	- Run Optuna hyperparameter optimization to find the best learning rates for Phase 1 and Phase 2.
+
+python src/models/train/train_exp09.py --config src/models/configs/exp09_vit_dann.yaml --no_prompt
+	- Train the full multi-phase Exp09 model. The `--no_prompt` flag uses default epochs from the config.
+
+python src/models/train/train_exp09.py --config src/models/configs/exp09_vit_dann.yaml --no_prompt --resume_from /content/drive/MyDrive/Colab_Intermediate_Training/resume_<nodeid>.pt
+	- Resume training from a saved Google Drive checkpoint (useful if Colab disconnects).
+
+python src/models/train/train_exp09.py --config src/models/configs/exp09_vit_dann.yaml --no_prompt  --skip_phase1 --phase1_weights /content/drive/MyDrive/Colab_Intermediate_Training/model_aoiE.pt
+	- Skip Phase 1 (SupCon + GRL) and load pre-trained weights to jump directly into Phase 2 (DEC clustering).
+
+
+Inference Exp09
+
+python src/models/predictions/predict_exp09.py --checkpoint_id <node_id> --source "data/features/bispectra_v2/<folder>:measured:all_shards" --grouping_mode channel_capped --reduce_method umap --reduce_dims 2 --time_threshold 1e-05 --dist_threshold 0.5
+	- Run inference using a trained Exp09 model. Groups predictions, applies UMAP dimensionality reduction, and clusters with HDBSCAN.
+
+python run_batch_predictions_exp09.py
+	- Run multiple predefined inference configurations for Exp09 in a batch.
+
+
+Localisation
+
+python src/localisation/localise.py --predictions_h5 "..." --raw_data_dir "..." --parent_node "<node_id>"
+	- Run Particle Swarm Optimization (PSO) to find the spatial coordinates of the PD source based on the model's TDOA predictions.

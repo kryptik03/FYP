@@ -45,13 +45,60 @@ To manage the immense complexity of multi-stage processing, the pipeline employs
 
 ## Implemented Models
 
-### `cnn_yolo1d` — Anchor-Free 1D YOLO Detector
-- **Task:** Joint PD pulse isolation (bounding box) + classification (PD1/PD2) in a single forward pass.
-- **Input:** Single-channel decimated waveform `(Batch, 1, 1000)` — 500,001-point raw signal decimated 500x via Max-Pooling.
-- **Grid:** 32 cells, each predicting objectness, centre offset, log-width, and 2 class logits.
-- **Architecture:** 4-block 1D CNN backbone (32→64→128→256 channels) + 1x1 conv detection head.
-- **Output routing:** `data/classification_output/cnn_yolo1d/` (Downstream Routing Rule — most downstream task wins).
-- **Config:** `src/models/configs/exp01_yolo1d.yaml`
+### `exp09_vit_dann` — ViT + SupCon + DANN + Spherical DEC
+- **Task:** Solves Latent Space Fragmentation using Physics Invariance, Distance Invariance, and Domain Agnosticism.
+  - *Phase 1:* Instance-Linked Supervised Contrastive Learning (SupCon) + Domain Adversarial Pre-Training (GRL).
+  - *Phase 2:* Spherical DEC Cluster Refinement + Semi-Supervised Pairwise constraints + DANN.
+- **Input:** 2-Channel Complex Bispectrum (Magnitude + Phase), `2×128×128` image grids. Captures the physics-based phase-coupling fingerprint that is stable across distances and source environments.
+- **Architecture:** Custom Mini-ViT (d_model=384, heads=6, depth=6, patch_size=16) + 4-Domain Gradient Reversal Layer (GRL).
+- **Configuration:** `src/models/configs/exp09_vit_dann.yaml`
+- **Output Routing:** Results are saved to `data/classification_output/exp09_dec/<YYYYMMDD_HHMMSS>_inf-<NodeID>/`.
+- **Generated Artifacts:**
+  - `predictions.h5` — Cluster assignments and soft probabilities
+  - `metrics.json` — Evaluation metrics
+  - `fig4_soft_q_heatmap.png` & `fig_time_vs_distance.png` — Visualization plots
+  - `analysis_history.txt` — Audit log
+
+### How to Use Exp09
+
+**1. Data Preparation**
+Run feature extraction first to generate 2-channel bispectrum shards:
+```bash
+python src/features/extract_bispectra_v2.py --input_dir data/raw/<source_dir> --parent_node_id <ID>
+```
+*Update the paths in `src/models/configs/exp09_vit_dann.yaml` to point to these new shards.*
+
+**Note:** steps 2 and 3 are done in colab and may take a few hours
+
+**2. Hyperparameter Tuning**
+Run the Optuna tuning script to find optimal learning rates:
+```bash
+python src/models/hyperparam_tuning/tune_exp09.py
+```
+
+**3. Training**
+Train the multi-phase model via the universal orchestrator:
+```bash
+python src/models/train.py --config src/models/configs/exp09_vit_dann.yaml
+```
+
+**4. Inference**
+Run inference using a trained checkpoint (e.g., node `k7vt`) with UMAP reduction and HDBSCAN clustering:
+```bash
+python src/models/predictions/predict_exp09.py \
+    --checkpoint_id <node_id> \
+    --grouping_mode channel_capped \
+    --reduce_method umap \
+    --reduce_dims 2 \
+    --time_threshold 1e-05 \
+    --dist_threshold 0.5 \
+    --source data/features/bispectra_v2/<folder_name>:<domain_type>:<shards>
+```
+*(Or use the batch helper script `run_batch_predictions_exp09.py` for automated bulk runs).*
+
+### Command Reference
+
+For a complete list of commands—including DAG management, data ingestion, feature extraction, and batch inference—please refer to the [`PowerShell Commands.txt`](file:///d:/Zee_Documents/Studies/Uni/Sem_8/KIE4002_FYP/Git_Cloned_Code/FYP/PowerShell%20Commands.txt) file.
 
 ---
 
@@ -63,22 +110,24 @@ To manage the immense complexity of multi-stage processing, the pipeline employs
 FYP/
 ├── data/
 │   ├── touchstone_files/             # HFSS .s2p Touchstone channel files
+│   ├── unprocessed_bearing/          # Raw CWRU bearing dataset files
 │   ├── unprocessed_measured/         # Raw oscilloscope .wfm files (pre-ingestion)
 │   ├── raw/                          # [git-ignored] Large HDF5 shards
-│   │   ├── synthesised/              # Birthplace of 'sy' HDF5 shards
-│   │   └── measured/                 # Birthplace of 'ms' HDF5 shards
+│   │   ├── cwru/                     # Birthplace of 'cw' HDF5 shards
+│   │   ├── eqn_generated/            # Birthplace of 'sy' (equation-based) HDF5 shards
+│   │   ├── measured/                 # Birthplace of 'ms' HDF5 shards
+│   │   └── synthesised/              # Birthplace of 'sy' (HFSS-based) HDF5 shards
 │   ├── isolation_output/
 │   │   └── <method>/
 │   │       └── YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
 │   ├── features/
 │   │   └── <method>/
 │   │       └── YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
-│   ├── classification_output/        # Bounding boxes + class predictions (joint models)
+│   ├── classification_output/        # Predictions, metrics, and figures
 │   │   └── <method>/
 │   │       └── YYYYMMDD_HHMMSS_[Origin]-[RootID]-[NodeID]/
-│   │           ├── predicted_boxes.h5    # shape (6, N_det)
-│   │           ├── predicted_classes.h5  # shape (5, N_det)
-│   │           ├── metrics.json          # Precision, Recall, F1, IoU, timing
+│   │           ├── predictions.h5
+│   │           ├── metrics.json
 │   │           └── analysis_history.txt
 │   ├── tdoa/
 │   │   └── <method>/
@@ -98,11 +147,13 @@ FYP/
 │   └── configuration_snapshots/      # config.yaml snapshots (Named by NodeID)
 │
 └── src/                              # All source code (version-controlled)
-    ├── generation/                   # MATLAB HFSS synthesis scripts
+    ├── bearing_dataset_generation/   # Scripts to ingest CWRU data
+    ├── equation_signals_dataset_generation/ # Mathematical signal generation
+    ├── hfss_signal_dataset_generation/      # MATLAB HFSS synthesis scripts
     ├── ingestion/                    # .wfm / .csv to HDF5 conversion & augmentation
     ├── isolation/                    # Non-DL signal isolation algorithms
-    ├── features/                     # Feature extraction algorithms
-    ├── classification/               # Non-DL classification algorithms (e.g., DBSCAN)
+    ├── features/                     # Feature extraction algorithms (e.g., Bispectrum)
+    ├── classification/               # Non-DL classification algorithms
     ├── obtain_tdoa/                  # TDOA math algorithms (e.g., Cross-Correlation)
     ├── localisation/                 # Spatial algorithms (e.g., PSO)
     ├── utils/
@@ -111,18 +162,15 @@ FYP/
     └── models/                       # Deep Learning Hub
         ├── configs/                  # Experiment YAML configs (source of truth)
         ├── data/                     # PyTorch Datasets & Transforms
-        │   ├── base_dataset.py       # Lazy HDF5 I/O base class
-        │   ├── dataset_detection.py  # YOLO target grid builder
-        │   └── transforms.py         # DecimateMaxPool1D (500x decimation)
+        ├── hyperparam_tuning/        # Optuna hyperparameter optimization scripts
         ├── models/
-        │   ├── backbones/
-        │   │   └── cnn_1d.py         # 4-block 1D CNN feature extractor
-        │   └── heads/
-        │       └── yolo_head.py      # 1x1 conv detection projector
-        ├── tasks/
-        │   └── task_detection.py     # YOLO loss, training step, IoU eval, decoding
-        ├── train.py                  # Universal DAG training orchestrator
-        └── predict.py                # Inference + automatic performance evaluation
+        │   ├── backbones/            # CNN, ViT backbones
+        │   └── heads/                # YOLO, Projection, DANN heads
+        ├── predictions/              # Inference scripts per experiment
+        ├── tasks/                    # PyTorch Lightning-style training logic
+        ├── train/                    # Training orchestrators per experiment
+        ├── utils/                    # PyTorch utilities
+        └── train.py                  # Universal DAG training orchestrator
 ```
 
 ---
