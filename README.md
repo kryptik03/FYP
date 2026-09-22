@@ -12,8 +12,10 @@ The system operates on two parallel data tracks:
 
 | Track | Origin Tag | Description |
 |-------|------------|-------------|
-| **Synthetic** | `sy` | Mathematically rigorous data driven by HFSS co-simulation via MATLAB |
-| **Measured** | `ms` | Augmented real-world measurements captured from physical UHF sensors |
+| **Synthetic (HFSS)** | `sy` | Mathematically rigorous data driven by HFSS co-simulation via MATLAB |
+| **Synthetic (Equation)** | `eq` | Mathematically synthesized PD pulses using standard equations (SEDO, DED, DEDO, SMG) |
+| **Measured (UHF)** | `ms` | Augmented real-world measurements captured from physical UHF sensors |
+| **Measured (Bearing)** | `cw` | CWRU bearing dataset used for robust domain adversarial training |
 
 To manage the immense complexity of multi-stage processing, the pipeline employs a strict **Data Lineage Tracking System** (SQLite DAG) and a highly modular, **Task-Driven PyTorch Architecture**.
 
@@ -69,6 +71,11 @@ python src/features/extract_bispectra_v2.py --input_dir data/raw/<source_dir> --
 *Update the paths in `src/models/configs/exp09_vit_dann.yaml` to point to these new shards.*
 
 **Note:** steps 2 and 3 are done in colab and may take a few hours
+Reference colab notebook for tuning and training: https://colab.research.google.com/drive/1fqfXguS4gZBtrj4mDTzsi8Eqh8JCOLDH?usp=sharing
+
+Reference Kaggle Datasets for tuning and training: 
+https://www.kaggle.com/datasets/chiangchangzee/ccz-fyp
+https://www.kaggle.com/datasets/chiangchangzee/ccz-fyp-features-only
 
 **2. Hyperparameter Tuning**
 Run the Optuna tuning script to find optimal learning rates:
@@ -203,8 +210,10 @@ FYP/
 
 | Stage | Input | Output | Status |
 |---|---|---|---|
-| **A1. Synthesis** | `data/touchstone_files/` | `data/raw/synthesised/` | Done — 20 shards (ShmH) |
-| **A2. Ingestion** | `data/unprocessed_measured/` | `data/raw/measured/` | Implemented |
+| **A1. Synthesis (HFSS)** | `data/touchstone_files/` | `data/raw/synthesised/` | Done — 20 shards (ShmH) |
+| **A2. Synthesis (Equation)** | `None` | `data/raw/eqn_generated/` | Implemented |
+| **A3. Ingestion (UHF)** | `data/unprocessed_measured/` | `data/raw/measured/` | Implemented |
+| **A4. Ingestion (CWRU)** | `data/unprocessed_bearing/` | `data/raw/cwru/` | Implemented |
 | **B+D. Detection (DL)** | `data/raw/synthesised/` | `data/classification_output/cnn_yolo1d/` | **Active** — model QIRE |
 | **E. TDOA** | `data/classification_output/` | `data/tdoa/<method>/` | Pending |
 | **F. Localisation** | `data/tdoa/` | `data/localisation_output/<method>/` | Pending |
